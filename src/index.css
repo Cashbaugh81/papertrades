@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #faf7f1;
+  --color-surface: #ffffff;
+  --color-ink: #16191d;
+  --color-muted: #6e6862;
+  --color-rule: #e4dcce;
+  --color-accent: #1f4d3d;
+  --color-gain: #1b6b4a;
+  --color-loss: #a03a28;
+  --color-flag: #8a5a12;
+
+  --font-serif: ui-serif, Georgia, "Times New Roman", serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@layer base {
+  html {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  /* Every figure in this product is compared against another figure, so all of
+     them are tabular and right-aligned by default. */
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+    text-align: right;
+  }
+
+  .figure {
+    font-family: var(--font-serif);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  .micro {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-muted);
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  input,
+  select,
+  button,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+@layer utilities {
+  .hairline {
+    border-color: var(--color-rule);
+  }
+
+  /* Signature element: the parallel-path lines draw once on mount, left to right.
+     A width-animated clip is used instead of stroke-dash tricks so it works at any
+     history length without measuring each path. */
+  .reveal-rect {
+    animation: reveal 620ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    transform-origin: left center;
+    transform: scaleX(0);
+  }
+
+  @keyframes reveal {
+    to {
+      transform: scaleX(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal-rect {
+      animation: none;
+      transform: scaleX(1);
+    }
+  }
+}

@@ -1,0 +1,282 @@
+import { Link } from "react-router-dom";
+import { ArrowLeft, AlertTriangle } from "lucide-react";
+import type { Portfolio, PortfolioState, Tx } from "@/lib/types";
+import type { PriceIndex } from "@/lib/prices";
+import PathChart from "@/components/PathChart";
+import TradeTicket from "@/components/TradeTicket";
+import { closeOn } from "@/lib/prices";
+import { historyDays, humanDate, money, pct, signedPct } from "@/lib/ledger";
+
+type Props = {
+  portfolio: Portfolio;
+  state: PortfolioState;
+  index: PriceIndex;
+  states: PortfolioState[];
+  baseline?: PortfolioState;
+  onTrade: (tx: Tx) => void;
+  onDeleteTx: (txId: string) => void;
+  priceFor: (ticker: string) => number | undefined;
+};
+
+export default function PortfolioPage({
+  portfolio,
+  state,
+  index,
+  states,
+  baseline,
+  onTrade,
+  onDeleteTx,
+  priceFor,
+}: Props) {
+  const spread = baseline ? state.returnOnInvested - baseline.returnOnInvested : 0;
+  const days = historyDays(state.dates);
+  const sortedTx = [...portfolio.tx].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+  return (
+    <div className="space-y-9">
+      <div>
+        <Link
+          to="/"
+          className="mb-5 inline-flex items-center gap-1.5 text-[12px] text-muted transition-colors hover:text-ink"
+        >
+          <ArrowLeft size={13} /> All portfolios
+        </Link>
+
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="figure text-[32px] leading-tight tracking-tight">{state.name}</h1>
+            <p className="mt-1.5 max-w-xl text-[14px] leading-relaxed text-muted">{state.thesis}</p>
+          </div>
+          <div className="text-right">
+            <div className="micro">worth today</div>
+            <div className="num figure text-[32px] leading-none tracking-tight">{money(state.value)}</div>
+            <div
+              className={`num mt-1 text-[13px] ${state.returnOnInvested >= 0 ? "text-gain" : "text-loss"}`}
+            >
+              {signedPct(state.returnOnInvested)} on {money(state.invested)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <section className="grid grid-cols-2 gap-x-6 gap-y-5 border-y border-rule py-5 md:grid-cols-5">
+        <Stat label="Put in" value={money(state.invested)} />
+        <Stat label="Cash left" value={money(state.cash, 2)} />
+        <Stat
+          label="Max drop"
+          value={pct(state.maxDrawdown)}
+          tone="loss"
+          hint="deepest fall along the path"
+        />
+        <Stat label="Volatility" value={pct(state.volatility)} hint="annualised, daily returns" />
+        <Stat
+          label="vs baseline"
+          value={baseline ? (baseline.id === state.id ? "—" : signedPct(spread)) : "—"}
+          tone={spread >= 0 ? "gain" : "loss"}
+          hint={baseline ? baseline.name : undefined}
+        />
+      </section>
+
+      {state.rejected.length > 0 && (
+        <div className="flex items-start gap-2 rounded-sm border-l-2 border-loss bg-loss/5 px-3.5 py-2.5 text-[12px] leading-relaxed text-loss">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          <div>
+            <strong className="font-medium">
+              {state.rejected.length} trade(s) here could not be filled
+            </strong>{" "}
+            and are excluded from the value shown. {state.rejected.join("; ")}
+          </div>
+        </div>
+      )}
+
+      <section>
+        <div className="mb-3 flex items-baseline justify-between">
+          <h2 className="text-[15px] font-medium">Path</h2>
+          <span className="micro">
+            {days} days · {humanDate(state.dates[0] ?? "")} → {humanDate(index.lastDate)}
+          </span>
+        </div>
+        <div className="rounded-sm border border-rule bg-surface p-4">
+          <PathChart states={states} baselineId={baseline?.id} height={260} />
+        </div>
+      </section>
+
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-w-0 space-y-8">
+          <section>
+            <div className="mb-3 flex items-baseline justify-between">
+              <h2 className="text-[15px] font-medium">Holdings</h2>
+              <span className="micro">{state.holdings.length} positions</span>
+            </div>
+
+            {state.holdings.length === 0 ? (
+              <p className="rounded-sm border border-rule bg-surface px-4 py-6 text-center text-[13px] text-muted">
+                Nothing held yet. Use the ticket to put the cash to work.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+              <table className="w-full min-w-[420px] border-collapse text-[13px]">
+                <thead>
+                  <tr className="border-b border-rule text-left">
+                    <th className="py-2 pr-3 font-medium text-muted">Ticker</th>
+                    <th className="px-3 py-2 text-right font-medium text-muted">Units</th>
+                    <th className="px-3 py-2 text-right font-medium text-muted">Price</th>
+                    <th className="px-3 py-2 text-right font-medium text-muted">Value</th>
+                    <th className="w-20 px-3 py-2 text-right font-medium text-muted">Weight</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.holdings.map((h) => (
+                    <tr key={h.ticker} className="border-b border-rule/70">
+                      <td className="py-2.5 pr-3 font-medium">{h.ticker}</td>
+                      <td className="num px-3 py-2.5 text-muted">{h.units.toFixed(4)}</td>
+                      <td className="num px-3 py-2.5 text-muted">{money(h.price, 2)}</td>
+                      <td className="num px-3 py-2.5">{money(h.value)}</td>
+                      <td className="num px-3 py-2.5">
+                        <div className="flex items-center justify-end gap-2">
+                          <span className="text-muted">{pct(h.weight, 0)}</span>
+                          <span className="h-1 w-8 overflow-hidden rounded-full bg-rule">
+                            <span
+                              className="block h-full rounded-full bg-accent"
+                              style={{ width: `${Math.min(100, h.weight * 100)}%` }}
+                            />
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              </div>
+            )}
+          </section>
+
+          <section>
+            <div className="mb-1 flex items-baseline justify-between">
+              <h2 className="text-[15px] font-medium">Decision log</h2>
+              <span className="micro">newest first</span>
+            </div>
+            <p className="mb-3 text-[12px] leading-relaxed text-muted">
+              Every trade you made, at the price you got. This is the part worth reading back in
+              three months.
+            </p>
+
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] border-collapse text-[13px]">
+              <thead>
+                <tr className="border-b border-rule text-left">
+                  <th className="py-2 pr-3 font-medium text-muted">Date</th>
+                  <th className="px-3 py-2 font-medium text-muted">Decision</th>
+                  <th className="px-3 py-2 text-right font-medium text-muted">Amount</th>
+                  <th className="px-3 py-2 text-right font-medium text-muted">Price</th>
+                  <th className="px-3 py-2 font-medium text-muted">Note</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {sortedTx.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="py-6 text-center text-muted">
+                      No trades recorded yet.
+                    </td>
+                  </tr>
+                )}
+                {sortedTx.map((t) => {
+                  const px = t.price ?? (t.ticker ? closeOn(index, t.ticker, t.date) : undefined);
+                  return (
+                    <tr key={t.id} className="group border-b border-rule/70">
+                      <td className="whitespace-nowrap py-2.5 pr-3 text-muted">{humanDate(t.date)}</td>
+                      <td className="px-3 py-2.5">
+                        <span
+                          className={
+                            t.kind === "buy"
+                              ? "text-gain"
+                              : t.kind === "sell"
+                                ? "text-loss"
+                                : "text-muted"
+                          }
+                        >
+                          {t.kind === "buy" ? "Bought" : t.kind === "sell" ? "Sold" : "Deposited"}
+                        </span>{" "}
+                        <span className="font-medium">{t.ticker ?? ""}</span>
+                      </td>
+                      <td className="num px-3 py-2.5">{t.amount ? money(t.amount, 2) : "—"}</td>
+                      <td className="num px-3 py-2.5 text-muted">{px ? money(px, 2) : "—"}</td>
+                      <td className="max-w-52 px-3 py-2.5 text-muted">
+                        {t.note ? <span className="line-clamp-2">{t.note}</span> : <span className="text-rule">—</span>}
+                      </td>
+                      <td className="pl-2 text-right">
+                        <button
+                          onClick={() => onDeleteTx(t.id)}
+                          className="text-[11px] text-muted opacity-0 transition-opacity duration-150 hover:text-loss group-hover:opacity-100 focus-visible:opacity-100"
+                          aria-label={`Remove trade from ${humanDate(t.date)}`}
+                        >
+                          remove
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            </div>
+          </section>
+        </div>
+
+        <aside className="lg:sticky lg:top-32 lg:self-start">
+          <TradeTicket
+            state={state}
+            fillDate={index.lastDate}
+            priceFor={priceFor}
+            tickers={index.tickers}
+            onTrade={onTrade}
+          />
+          <div className="mt-4 space-y-1.5 rounded-sm border border-rule px-3.5 py-3 text-[11px] leading-relaxed text-muted">
+            <div className="flex justify-between">
+              <span>Start date</span>
+              <span className="text-ink">{humanDate(portfolio.startDate)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Initial capital</span>
+              <span className="num text-ink">{money(portfolio.initial)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Monthly deposit</span>
+              <span className="num text-ink">{money(portfolio.monthly)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Prices as of</span>
+              <span className="num text-ink">{humanDate(index.lastDate)}</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "gain" | "loss";
+}) {
+  return (
+    <div>
+      <div className="micro">{label}</div>
+      <div
+        className={`num mt-1 text-[16px] font-medium ${
+          tone === "gain" ? "text-gain" : tone === "loss" ? "text-loss" : ""
+        }`}
+      >
+        {value}
+      </div>
+      {hint && <div className="mt-0.5 text-[10px] leading-tight text-muted">{hint}</div>}
+    </div>
+  );
+}
