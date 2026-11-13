@@ -49,13 +49,17 @@ Deno.serve(async (req) => {
 
   try {
     // ---- 1. tickers in use ---------------------------------------------------
+    // Every ticker in an order or a mix of a comparison that's still active.
     const inUse = new Set<string>([CALENDAR_TICKER]);
-    const { data: txTickers, error: e1 } = await db.from("transactions").select("ticker").not("ticker", "is", null);
+    const { data: used, error: e1 } = await db
+      .from("transactions")
+      .select("ticker, weights, portfolios!inner(comparison_sets!inner(archived_at))")
+      .is("portfolios.comparison_sets.archived_at", null);
     if (e1) throw e1;
-    for (const r of txTickers ?? []) inUse.add(r.ticker as string);
-    const { data: weightRows, error: e2 } = await db.from("portfolios").select("weights").not("weights", "is", null);
-    if (e2) throw e2;
-    for (const r of weightRows ?? []) for (const t of Object.keys((r.weights as object) ?? {})) inUse.add(t);
+    for (const r of used ?? []) {
+      if (r.ticker) inUse.add(r.ticker as string);
+      for (const t of Object.keys((r.weights as object) ?? {})) inUse.add(t);
+    }
 
     for (const t of [...inUse].sort()) {
       try {
@@ -83,10 +87,16 @@ Deno.serve(async (req) => {
       try {
         const { data: prow, error: pe } = await db.from("portfolios").select("*").eq("id", portfolioId).single();
         if (pe) throw pe;
+        const { data: srow, error: sse } = await db
+          .from("comparison_sets")
+          .select("initial, weekly")
+          .eq("id", prow.set_id)
+          .single();
+        if (sse) throw sse;
         const { data: trows, error: te } = await db.from("transactions").select("*").eq("portfolio_id", portfolioId);
         if (te) throw te;
 
-        const p = rowToPortfolio(prow, trows ?? []);
+        const p = rowToPortfolio(prow, srow, trows ?? []);
         const from = new Date(Date.parse(`${p.startDate}T00:00:00Z`) - LOOKBACK_DAYS * 86_400_000)
           .toISOString()
           .slice(0, 10);

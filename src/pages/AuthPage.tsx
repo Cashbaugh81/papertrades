@@ -52,7 +52,7 @@ export default function AuthPage({ initialMode = "in", onResetDone }: Props) {
 
   const title = { up: "Open your ledger", in: "Sign in", forgot: "Reset your password", reset: "Choose a new password" }[mode];
   const subtitle = {
-    up: "Three example portfolios are set up for you to compare from day one.",
+    up: "Then choose up to three portfolios to compare, starting today.",
     in: "Welcome back.",
     forgot: "We'll email you a link to set a new one.",
     reset: "You followed a reset link. Set a new password to continue.",

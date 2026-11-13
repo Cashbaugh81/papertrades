@@ -77,3 +77,23 @@ export function monthStarts(calendar: string[], from: string, to: string): strin
   }
   return out;
 }
+
+/**
+ * The first trading day of each week (Monday-based) between `from` and `to`.
+ * A holiday Monday moves that week's day to Tuesday, and so on.
+ */
+export function weekStarts(calendar: string[], from: string, to: string): string[] {
+  const out: string[] = [];
+  let lastKey = "";
+  for (const d of calendar) {
+    if (d < from || d > to) continue;
+    const t = Date.parse(`${d}T00:00:00Z`);
+    const dow = (new Date(t).getUTCDay() + 6) % 7; // Monday = 0
+    const key = new Date(t - dow * 86_400_000).toISOString().slice(0, 10);
+    if (key !== lastKey) {
+      out.push(d);
+      lastKey = key;
+    }
+  }
+  return out;
+}

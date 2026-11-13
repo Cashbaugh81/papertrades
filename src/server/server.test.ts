@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { closeInstant, lastCutoff } from "@/lib/market";
 import { buildIndex } from "@/lib/prices";
-import { rowToPortfolio, seriesToBundle, tickersFor, type PortfolioRow, type TransactionRow } from "@/lib/rows";
+import { rowToPortfolio, seriesToBundle, tickersFor, toWeights, type PortfolioRow, type TransactionRow } from "@/lib/rows";
 import { settle } from "@/server/settle";
 import {
   incrementalStart,
@@ -25,15 +25,14 @@ const index = buildIndex(
 const portfolioRow: PortfolioRow = {
   id: "p1",
   user_id: "u1",
+  set_id: "s1",
+  slot: 1,
   name: "Mine",
   thesis: "",
   start_date: "2026-11-09",
-  initial: 1000,
-  monthly: 0,
-  weights: null,
-  example: false,
   created_at: "2026-11-09T15:00:00Z",
 };
+const setRow = { initial: 1000, weekly: 0 };
 
 let seq = 0;
 function txRow(over: Partial<TransactionRow>): TransactionRow {
@@ -56,6 +55,7 @@ function txRow(over: Partial<TransactionRow>): TransactionRow {
     fill_amount: null,
     reject_reason: null,
     processed_at: null,
+    weights: null,
     created_at: `2026-11-09T15:00:${String(seq).padStart(2, "0")}Z`,
     ...over,
   };
@@ -71,7 +71,7 @@ describe("settle", () => {
     // Placed after the close on the 10th; VTI has no close on the 11th, so the
     // fill waits for the 12th rather than using the 10th's known price.
     const t = txRow({ placed_at: ny("2026-11-10", 18), amount: 310 });
-    const p = rowToPortfolio(portfolioRow, [t]);
+    const p = rowToPortfolio(portfolioRow, setRow, [t]);
     const [s] = settle(index, p, new Set([t.id]));
     expect(s).toEqual({
       id: t.id,
@@ -85,13 +85,13 @@ describe("settle", () => {
 
   it("leaves an order pending when its close is not in the data yet", () => {
     const t = txRow({ placed_at: ny("2026-11-13", 17) });
-    const p = rowToPortfolio(portfolioRow, [t]);
+    const p = rowToPortfolio(portfolioRow, setRow, [t]);
     expect(settle(index, p, new Set([t.id]))).toEqual([]);
   });
 
   it("rejects a buy the cash can't fund, at its fill day", () => {
     const t = txRow({ placed_at: ny("2026-11-09", 10), amount: 5000 });
-    const p = rowToPortfolio(portfolioRow, [t]);
+    const p = rowToPortfolio(portfolioRow, setRow, [t]);
     const [s] = settle(index, p, new Set([t.id]));
     expect(s.status).toBe("rejected");
     expect(s.filled_on).toBe("2026-11-09");
@@ -104,7 +104,7 @@ describe("settle", () => {
       txRow({ kind: "deposit", ticker: null, placed_at: ny("2026-11-10", 9), amount: 500, status: "filled" }),
       txRow({ placed_at: ny("2026-11-12", 10), amount: 550 }),
     ];
-    const p = rowToPortfolio(portfolioRow, rows);
+    const p = rowToPortfolio(portfolioRow, setRow, rows);
     const out = settle(index, p, new Set([rows[2].id]));
     expect(out).toHaveLength(1);
     expect(out[0].status).toBe("filled"); // 100 left + 500 deposited = 600 >= 550
@@ -113,20 +113,33 @@ describe("settle", () => {
   it("only reports the ids it was asked about", () => {
     const a = txRow({ placed_at: ny("2026-11-09", 10), amount: 100 });
     const b = txRow({ placed_at: ny("2026-11-09", 11), amount: 100 });
-    const p = rowToPortfolio(portfolioRow, [a, b]);
+    const p = rowToPortfolio(portfolioRow, setRow, [a, b]);
     expect(settle(index, p, new Set([b.id])).map((s) => s.id)).toEqual([b.id]);
   });
 });
 
 describe("rows", () => {
-  it("always includes the calendar anchor and weight tickers", () => {
-    const p = rowToPortfolio({ ...portfolioRow, weights: { BND: 0.4, VTI: 0.6 } }, [txRow({ ticker: "QQQ" })]);
+  it("always includes the calendar anchor and every mix's tickers", () => {
+    const p = rowToPortfolio(portfolioRow, setRow, [
+      txRow({ kind: "rebalance", ticker: null, amount: null, weights: { BND: 0.4, VTI: 0.6 } }),
+      txRow({ ticker: "QQQ" }),
+    ]);
     expect(tickersFor(p)).toEqual(["BND", "QQQ", "SPY", "VTI"]);
   });
 
-  it("drops junk weights", () => {
-    const p = rowToPortfolio({ ...portfolioRow, weights: { VTI: 1, BAD: "x", NEG: -1 } }, []);
-    expect(p.weights).toEqual({ VTI: 1 });
+  it("takes amounts from the set and drops junk in a mix", () => {
+    const p = rowToPortfolio(portfolioRow, { initial: 500, weekly: 25 }, []);
+    expect([p.initial, p.weekly]).toEqual([500, 25]);
+    expect(toWeights({ VTI: 1, BAD: "x", NEG: -1 })).toEqual({ VTI: 1 });
+    expect(toWeights([1, 2])).toBeUndefined();
+  });
+
+  it("settles a mix change with the day and the money moved", () => {
+    const first = txRow({ kind: "rebalance", ticker: null, amount: null, weights: { SPY: 1 }, placed_at: ny("2026-11-09", 10) });
+    const p = rowToPortfolio(portfolioRow, setRow, [first]);
+    expect(settle(index, p, new Set([first.id]))).toEqual([
+      { id: first.id, status: "filled", filled_on: "2026-11-09", fill_amount: 1000 },
+    ]);
   });
 });
 

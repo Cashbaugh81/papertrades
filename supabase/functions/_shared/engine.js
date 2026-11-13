@@ -56,6 +56,21 @@ function monthStarts(calendar, from, to) {
   }
   return out;
 }
+function weekStarts(calendar, from, to) {
+  const out = [];
+  let lastKey = "";
+  for (const d of calendar) {
+    if (d < from || d > to) continue;
+    const t = Date.parse(`${d}T00:00:00Z`);
+    const dow = (new Date(t).getUTCDay() + 6) % 7;
+    const key = new Date(t - dow * 864e5).toISOString().slice(0, 10);
+    if (key !== lastKey) {
+      out.push(d);
+      lastKey = key;
+    }
+  }
+  return out;
+}
 
 // src/lib/market.ts
 var NY = "America/New_York";
@@ -95,6 +110,13 @@ function lastCutoff(now = Date.now()) {
 // src/lib/rows.ts
 var CALENDAR_TICKER = "SPY";
 var num = (v) => v === null || v === void 0 ? void 0 : Number(v);
+function toWeights(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return void 0;
+  const out = Object.fromEntries(
+    Object.entries(v).map(([k, x]) => [k, Number(x)]).filter(([, x]) => Number.isFinite(x) && x > 0)
+  );
+  return Object.keys(out).length ? out : void 0;
+}
 function rowToTx(r) {
   return {
     id: r.id,
@@ -104,29 +126,28 @@ function rowToTx(r) {
     ticker: r.ticker ?? void 0,
     amount: num(r.amount),
     units: num(r.units),
-    note: r.note ?? void 0
+    note: r.note ?? void 0,
+    weights: r.kind === "rebalance" ? toWeights(r.weights) : void 0
   };
 }
-function rowToPortfolio(p, txs) {
-  const weights = p.weights && typeof p.weights === "object" && !Array.isArray(p.weights) ? Object.fromEntries(
-    Object.entries(p.weights).map(([k, v]) => [k, Number(v)]).filter(([, v]) => Number.isFinite(v) && v > 0)
-  ) : void 0;
+function rowToPortfolio(p, set, txs) {
   return {
     id: p.id,
     name: p.name,
     thesis: p.thesis,
     startDate: p.start_date,
-    initial: Number(p.initial),
-    monthly: Number(p.monthly),
-    weights,
-    example: p.example,
+    initial: Number(set.initial),
+    weekly: Number(set.weekly),
     tx: txs.filter((t) => t.portfolio_id === p.id).sort((a, b) => a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0).map(rowToTx)
   };
 }
 function tickersFor(p) {
   const s = /* @__PURE__ */ new Set([CALENDAR_TICKER]);
   for (const t of Object.keys(p.weights ?? {})) s.add(t);
-  for (const t of p.tx) if (t.ticker) s.add(t.ticker);
+  for (const t of p.tx) {
+    if (t.ticker) s.add(t.ticker);
+    for (const k of Object.keys(t.weights ?? {})) s.add(k);
+  }
   return [...s].sort();
 }
 function seriesToBundle(rows, source = "supabase") {
@@ -152,6 +173,7 @@ function lowerBound(calendar, day) {
   return lo < calendar.length ? lo : -1;
 }
 function fillFor(index, tx, days) {
+  if (tx.kind === "rebalance") return rebalanceDay(index, tx, days);
   if (!tx.ticker) return void 0;
   if (tx.placedAt) {
     const placed = Date.parse(tx.placedAt);
@@ -171,6 +193,41 @@ function fillFor(index, tx, days) {
   const day = days[i];
   const px = tx.price ?? closeOn(index, tx.ticker, day);
   return px !== void 0 && px > 0 ? { day, price: px } : void 0;
+}
+function rebalanceDay(index, tx, days) {
+  const tickers = Object.keys(tx.weights ?? {});
+  if (tickers.length === 0) return void 0;
+  const allClose = (day) => tickers.every((t) => (index.close(t, day) ?? 0) > 0);
+  if (tx.placedAt) {
+    const placed = Date.parse(tx.placedAt);
+    if (!Number.isFinite(placed)) return void 0;
+    const i2 = lowerBound(days, nyDate(placed));
+    if (i2 < 0) return void 0;
+    for (let k = i2; k < days.length; k++) {
+      if (closesAfter(days[k], tx.placedAt) && allClose(days[k])) return { day: days[k], price: 0 };
+    }
+    return void 0;
+  }
+  const i = lowerBound(days, tx.date);
+  if (i < 0) return void 0;
+  for (let k = i; k < days.length; k++) if (allClose(days[k])) return { day: days[k], price: 0 };
+  return void 0;
+}
+function applyRebalance(index, book, tx, day) {
+  let total = book.cash;
+  for (const [t, u] of book.units) {
+    if (u <= 1e-12) continue;
+    total += u * (closeOn(index, t, day) ?? 0);
+  }
+  book.units = /* @__PURE__ */ new Map();
+  book.cash = 0;
+  const weights = tx.weights ?? {};
+  for (const [t, w] of Object.entries(weights)) {
+    const px = index.close(t, day);
+    book.units.set(t, total * w / px);
+  }
+  book.weights = weights;
+  return { date: day, price: 0, units: 0, amount: total };
 }
 function applyOrder(book, tx, day, px) {
   if (tx.kind === "buy") {
@@ -223,7 +280,7 @@ function eventKey(tx) {
 function computeState(index, p, endDate) {
   const start = p.startDate;
   const dates = index.calendar.filter((d) => d >= start && d <= endDate);
-  const book = { units: /* @__PURE__ */ new Map(), cash: 0, rejected: [] };
+  const book = { units: /* @__PURE__ */ new Map(), cash: 0, rejected: [], weights: p.weights };
   const fills = {};
   const rejections = {};
   const pendingTx = [];
@@ -251,7 +308,17 @@ function computeState(index, p, endDate) {
   for (const list of byDay.values()) {
     list.sort((a, b) => eventKey(a) < eventKey(b) ? -1 : eventKey(a) > eventKey(b) ? 1 : 0);
   }
-  const contribDays = new Set(monthStarts(index.calendar, start, endDate));
+  const contribAmount = /* @__PURE__ */ new Map();
+  if ((p.monthly ?? 0) > 0) {
+    for (const d of monthStarts(index.calendar, start, endDate)) {
+      contribAmount.set(d, (contribAmount.get(d) ?? 0) + p.monthly);
+    }
+  }
+  if ((p.weekly ?? 0) > 0) {
+    for (const d of weekStarts(index.calendar, start, endDate)) {
+      contribAmount.set(d, (contribAmount.get(d) ?? 0) + p.weekly);
+    }
+  }
   const values = [];
   const flows = [];
   for (let i = 0; i < dates.length; i++) {
@@ -262,10 +329,13 @@ function computeState(index, p, endDate) {
         book.cash += p.initial;
         flow += p.initial;
       }
-    } else if (contribDays.has(day) && p.monthly > 0) {
-      book.cash += p.monthly;
-      flow += p.monthly;
-      deployContribution(index, book, day, p.monthly, p.weights);
+    } else {
+      const amt = contribAmount.get(day) ?? 0;
+      if (amt > 0) {
+        book.cash += amt;
+        flow += amt;
+        deployContribution(index, book, day, amt, book.weights);
+      }
     }
     for (const tx of byDay.get(day) ?? []) {
       if (tx.kind === "deposit") {
@@ -274,6 +344,10 @@ function computeState(index, p, endDate) {
           book.cash += amt;
           flow += amt;
         }
+        continue;
+      }
+      if (tx.kind === "rebalance") {
+        fills[tx.id] = applyRebalance(index, book, tx, day);
         continue;
       }
       const before = book.rejected.length;
@@ -341,13 +415,15 @@ function computeState(index, p, endDate) {
     h.weight = totalHoldings > 0 ? h.value / totalHoldings : 0;
   }
   holdings.sort((a, b) => b.value - a.value);
-  const pending = pendingTx.filter((t) => !!t.ticker && t.kind !== "deposit").map((t) => ({
-    txId: t.id,
-    kind: t.kind,
-    ticker: t.ticker,
-    amount: t.amount ?? (t.units ?? 0) * (closeOn(index, t.ticker, finalDay) ?? 0),
-    placedAt: t.placedAt ?? t.date
-  })).sort((a, b) => a.placedAt < b.placedAt ? -1 : 1);
+  const pending = pendingTx.filter((t) => t.kind !== "deposit" && (t.kind === "rebalance" || !!t.ticker)).map(
+    (t) => t.kind === "rebalance" ? { txId: t.id, kind: "rebalance", amount: 0, weights: t.weights, placedAt: t.placedAt ?? t.date } : {
+      txId: t.id,
+      kind: t.kind,
+      ticker: t.ticker,
+      amount: t.amount ?? (t.units ?? 0) * (closeOn(index, t.ticker, finalDay) ?? 0),
+      placedAt: t.placedAt ?? t.date
+    }
+  ).sort((a, b) => a.placedAt < b.placedAt ? -1 : 1);
   const reserved = pending.filter((o) => o.kind === "buy").reduce((a, o) => a + o.amount, 0);
   return {
     id: p.id,
@@ -371,7 +447,8 @@ function computeState(index, p, endDate) {
     rejected: book.rejected,
     pending,
     fills,
-    rejections
+    rejections,
+    currentWeights: book.weights
   };
 }
 
@@ -381,6 +458,11 @@ function settle(index, p, pendingIds) {
   const out = [];
   for (const id of pendingIds) {
     const f = state.fills[id];
+    const tx = p.tx.find((t) => t.id === id);
+    if (f && tx?.kind === "rebalance") {
+      out.push({ id, status: "filled", filled_on: f.date, fill_amount: round(f.amount, 2) });
+      continue;
+    }
     if (f) {
       out.push({
         id,

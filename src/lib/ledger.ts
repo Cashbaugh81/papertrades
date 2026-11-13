@@ -6,7 +6,7 @@ import type {
   PortfolioState,
   Tx,
 } from "@/lib/types";
-import { closeOn, monthStarts, type PriceIndex } from "@/lib/prices";
+import { closeOn, monthStarts, weekStarts, type PriceIndex } from "@/lib/prices";
 import { closesAfter, nyDate } from "@/lib/market";
 
 /**
@@ -31,7 +31,13 @@ export function txDate(t: Tx): string {
   return t.date;
 }
 
-type Book = { units: Map<string, number>; cash: number; rejected: string[] };
+type Book = {
+  units: Map<string, number>;
+  cash: number;
+  rejected: string[];
+  /** The mix contributions follow: the last filled rebalance, else the portfolio's weights. */
+  weights?: Record<string, number>;
+};
 
 /** First index in a sorted calendar whose day is >= `day`, or -1. */
 function lowerBound(calendar: string[], day: string): number {
@@ -54,6 +60,7 @@ export function fillFor(
   tx: Tx,
   days: string[],
 ): { day: string; price: number } | undefined {
+  if (tx.kind === "rebalance") return rebalanceDay(index, tx, days);
   if (!tx.ticker) return undefined;
   if (tx.placedAt) {
     const placed = Date.parse(tx.placedAt);
@@ -78,6 +85,53 @@ export function fillFor(
   const day = days[i];
   const px = tx.price ?? closeOn(index, tx.ticker, day);
   return px !== undefined && px > 0 ? { day, price: px } : undefined;
+}
+
+/**
+ * A mix change fills at the first close (after it was placed) where every
+ * ticker in the new mix has its own close, so nothing is bought at a stale
+ * price. Legacy rows (no placedAt: a what-if's first mix) fill on their date.
+ */
+function rebalanceDay(index: PriceIndex, tx: Tx, days: string[]): { day: string; price: number } | undefined {
+  const tickers = Object.keys(tx.weights ?? {});
+  if (tickers.length === 0) return undefined;
+  const allClose = (day: string) => tickers.every((t) => (index.close(t, day) ?? 0) > 0);
+  if (tx.placedAt) {
+    const placed = Date.parse(tx.placedAt);
+    if (!Number.isFinite(placed)) return undefined;
+    const i = lowerBound(days, nyDate(placed));
+    if (i < 0) return undefined;
+    for (let k = i; k < days.length; k++) {
+      if (closesAfter(days[k], tx.placedAt) && allClose(days[k])) return { day: days[k], price: 0 };
+    }
+    return undefined;
+  }
+  const i = lowerBound(days, tx.date);
+  if (i < 0) return undefined;
+  for (let k = i; k < days.length; k++) if (allClose(days[k])) return { day: days[k], price: 0 };
+  return undefined;
+}
+
+/**
+ * Move everything (cash and holdings, valued at this close) into the new mix.
+ * Never rejected: with nothing to move it simply sets the mix that later
+ * contributions follow.
+ */
+function applyRebalance(index: PriceIndex, book: Book, tx: Tx, day: string): Fill {
+  let total = book.cash;
+  for (const [t, u] of book.units) {
+    if (u <= 1e-12) continue;
+    total += u * (closeOn(index, t, day) ?? 0);
+  }
+  book.units = new Map();
+  book.cash = 0;
+  const weights = tx.weights ?? {};
+  for (const [t, w] of Object.entries(weights)) {
+    const px = index.close(t, day)!; // rebalanceDay guarantees a close
+    book.units.set(t, (total * w) / px);
+  }
+  book.weights = weights;
+  return { date: day, price: 0, units: 0, amount: total };
 }
 
 function applyOrder(
@@ -173,7 +227,7 @@ export function computeState(
   const start = p.startDate;
   const dates = index.calendar.filter((d) => d >= start && d <= endDate);
 
-  const book: Book = { units: new Map(), cash: 0, rejected: [] };
+  const book: Book = { units: new Map(), cash: 0, rejected: [], weights: p.weights };
   const fills: Record<string, Fill> = {};
   const rejections: PortfolioState["rejections"] = {};
   const pendingTx: Tx[] = [];
@@ -209,7 +263,17 @@ export function computeState(
   // Contribution schedule is part of the portfolio definition, not a transaction:
   // same deposit on the same day for every portfolio, so the comparison isolates
   // what was bought rather than what was saved.
-  const contribDays = new Set(monthStarts(index.calendar, start, endDate));
+  const contribAmount = new Map<string, number>();
+  if ((p.monthly ?? 0) > 0) {
+    for (const d of monthStarts(index.calendar, start, endDate)) {
+      contribAmount.set(d, (contribAmount.get(d) ?? 0) + p.monthly!);
+    }
+  }
+  if ((p.weekly ?? 0) > 0) {
+    for (const d of weekStarts(index.calendar, start, endDate)) {
+      contribAmount.set(d, (contribAmount.get(d) ?? 0) + p.weekly!);
+    }
+  }
 
   const values: number[] = [];
   /** External money in on each day: initial, contributions and deposits. */
@@ -219,9 +283,9 @@ export function computeState(
     const day = dates[i];
     let flow = 0;
 
-    // Initial capital on day one, then the monthly contribution on each month's
-    // first trading day. On day one only the initial capital lands: the first
-    // monthly deposit belongs to the following month.
+    // Initial capital on day one, then the weekly (or monthly) contribution on
+    // each period's first trading day. On day one only the initial capital
+    // lands: the first contribution belongs to the following period.
     if (i === 0) {
       if (p.initial > 0) {
         book.cash += p.initial;
@@ -229,10 +293,13 @@ export function computeState(
         // Initial capital is NOT auto-deployed. It is allocated by the
         // portfolio's own orders, which is what makes the decision log real.
       }
-    } else if (contribDays.has(day) && p.monthly > 0) {
-      book.cash += p.monthly;
-      flow += p.monthly;
-      deployContribution(index, book, day, p.monthly, p.weights);
+    } else {
+      const amt = contribAmount.get(day) ?? 0;
+      if (amt > 0) {
+        book.cash += amt;
+        flow += amt;
+        deployContribution(index, book, day, amt, book.weights);
+      }
     }
 
     for (const tx of byDay.get(day) ?? []) {
@@ -242,6 +309,10 @@ export function computeState(
           book.cash += amt;
           flow += amt;
         }
+        continue;
+      }
+      if (tx.kind === "rebalance") {
+        fills[tx.id] = applyRebalance(index, book, tx, day);
         continue;
       }
       const before = book.rejected.length;
@@ -329,14 +400,18 @@ export function computeState(
 
   // Pending orders reserve cash so the ticket cannot spend the same dollars twice.
   const pending: PendingOrder[] = pendingTx
-    .filter((t): t is Tx & { ticker: string; kind: "buy" | "sell" } => !!t.ticker && t.kind !== "deposit")
-    .map((t) => ({
-      txId: t.id,
-      kind: t.kind,
-      ticker: t.ticker,
-      amount: t.amount ?? (t.units ?? 0) * (closeOn(index, t.ticker, finalDay) ?? 0),
-      placedAt: t.placedAt ?? t.date,
-    }))
+    .filter((t) => t.kind !== "deposit" && (t.kind === "rebalance" || !!t.ticker))
+    .map((t) =>
+      t.kind === "rebalance"
+        ? { txId: t.id, kind: "rebalance" as const, amount: 0, weights: t.weights, placedAt: t.placedAt ?? t.date }
+        : {
+            txId: t.id,
+            kind: t.kind as "buy" | "sell",
+            ticker: t.ticker!,
+            amount: t.amount ?? (t.units ?? 0) * (closeOn(index, t.ticker!, finalDay) ?? 0),
+            placedAt: t.placedAt ?? t.date,
+          },
+    )
     .sort((a, b) => (a.placedAt < b.placedAt ? -1 : 1));
   const reserved = pending.filter((o) => o.kind === "buy").reduce((a, o) => a + o.amount, 0);
 
@@ -363,6 +438,7 @@ export function computeState(
     pending,
     fills,
     rejections,
+    currentWeights: book.weights,
   };
 }
 

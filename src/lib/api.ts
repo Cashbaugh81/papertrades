@@ -6,7 +6,6 @@
 import { supabase } from "@/lib/supabase";
 import { nyDate } from "@/lib/market";
 import { rowToPortfolio, seriesToBundle, type SeriesRow } from "@/lib/rows";
-import { exampleStart, STARTERS } from "@/lib/starters";
 import type { Account, Portfolio, PriceBundle } from "@/lib/types";
 
 // ---- auth -------------------------------------------------------------------
@@ -74,85 +73,104 @@ function friendlyAuthError(msg: string): string {
   return msg;
 }
 
-// ---- portfolios and transactions -------------------------------------------
+// ---- comparison sets ----------------------------------------------------------
 
-export async function loadPortfolios(): Promise<Portfolio[]> {
-  const [{ data: ps, error: pe }, { data: ts, error: te }] = await Promise.all([
-    supabase.from("portfolios").select("*").order("created_at"),
-    supabase.from("transactions").select("*").order("created_at"),
-  ]);
+/** A column of the active comparison: its slot (1-3) and engine portfolio. */
+export type Column = { slot: number; portfolio: Portfolio };
+
+export type ActiveSet = {
+  id: string;
+  startDate: string;
+  initial: number;
+  weekly: number;
+  /** Started in the past: a replay chosen with hindsight, not a record. */
+  whatIf: boolean;
+  createdAt: string;
+  columns: Column[];
+};
+
+export type Mix = Record<string, number>;
+
+/** The user's active comparison, or null if they haven't started one. */
+export async function loadActiveSet(): Promise<ActiveSet | null> {
+  const { data: set, error } = await supabase
+    .from("comparison_sets")
+    .select("*")
+    .is("archived_at", null)
+    .maybeSingle();
+  if (error) throw error;
+  if (!set) return null;
+
+  const { data: ps, error: pe } = await supabase.from("portfolios").select("*").eq("set_id", set.id).order("slot");
   if (pe) throw pe;
+  const ids = (ps ?? []).map((p) => p.id);
+  const { data: ts, error: te } = ids.length
+    ? await supabase.from("transactions").select("*").in("portfolio_id", ids).order("created_at")
+    : { data: [], error: null };
   if (te) throw te;
-  return (ps ?? []).map((p) => rowToPortfolio(p, ts ?? []));
+
+  return {
+    id: set.id,
+    startDate: set.start_date,
+    initial: Number(set.initial),
+    weekly: Number(set.weekly),
+    whatIf: set.what_if,
+    createdAt: set.created_at,
+    columns: (ps ?? []).map((p) => ({ slot: p.slot, portfolio: rowToPortfolio(p, set, ts ?? []) })),
+  };
+}
+
+function rpcError(e: { message?: string } | null): Error {
+  return new Error(e?.message || "That didn't save. Try again.");
 }
 
 /**
- * Seed the example portfolios once per account. A flag in the user's metadata
- * stops them coming back after "Start fresh today" or on a second device.
+ * Start a comparison. The server archives the current one (kept, not
+ * deleted), and decides whether this is live (today) or a what-if (past).
  */
-export async function seedExamplesOnce(existing: Portfolio[]): Promise<boolean> {
-  const { data } = await supabase.auth.getUser();
-  if (data.user?.user_metadata?.seeded || existing.length > 0) return false;
-  await insertStarters(true);
-  await supabase.auth.updateUser({ data: { seeded: true } });
-  return true;
+export async function createSet(input: {
+  startDate: string;
+  initial: number;
+  weekly: number;
+  columns: { slot: number; weights: Mix; name?: string }[];
+}): Promise<void> {
+  const { error } = await supabase.rpc("create_comparison_set", {
+    p_start_date: input.startDate,
+    p_initial: input.initial,
+    p_weekly: input.weekly,
+    p_columns: input.columns,
+  });
+  if (error) throw rpcError(error);
 }
 
-/** Replace the examples with the same three as real portfolios starting today. */
-export async function startFresh(): Promise<void> {
-  const { error } = await supabase.from("portfolios").delete().eq("example", true);
-  if (error) throw error;
-  await insertStarters(false);
+/** Fill an empty column. In a live comparison its money starts today. */
+export async function addColumn(setId: string, slot: number, weights: Mix, name = ""): Promise<void> {
+  const { error } = await supabase.rpc("add_column", { p_set: setId, p_slot: slot, p_name: name, p_weights: weights });
+  if (error) throw rpcError(error);
 }
 
-async function insertStarters(example: boolean): Promise<void> {
-  const today = nyDate();
-  const start = example ? exampleStart(today) : today; // the server forces today for real ones
-  const rows = STARTERS.map((s) => ({
-    id: crypto.randomUUID(),
-    name: s.name,
-    thesis: s.thesis,
-    start_date: start,
-    initial: s.initial,
-    monthly: s.monthly,
-    weights: s.weights,
-    example,
-  }));
-  const { error: pe } = await supabase.from("portfolios").insert(rows);
-  if (pe) throw pe;
-  const txs = STARTERS.flatMap((s, i) =>
-    s.buys.map((b) => ({
-      portfolio_id: rows[i].id,
-      kind: "buy",
-      ticker: b.ticker,
-      amount: b.amount,
-      trade_date: start, // examples fill at this day's close; real orders get server time
-    })),
-  );
-  const { error: te } = await supabase.from("transactions").insert(txs);
-  if (te) throw te;
-}
-
-export type OrderInput = { kind: "buy" | "sell" | "deposit"; ticker?: string; amount: number; note?: string };
-
-/** Place an order or deposit. The server stamps the time; nothing else is trusted. */
-export async function placeOrder(portfolioId: string, o: OrderInput): Promise<void> {
+/** Move a column's money into a new mix at the next close. */
+export async function changeMix(portfolioId: string, weights: Mix, note?: string): Promise<void> {
   const { error } = await supabase.from("transactions").insert({
     portfolio_id: portfolioId,
-    kind: o.kind,
-    ticker: o.kind === "deposit" ? null : (o.ticker ?? null),
-    amount: o.amount,
-    note: o.note || null,
-    trade_date: nyDate(), // replaced by the server for real portfolios
+    kind: "rebalance",
+    weights,
+    note: note?.trim() || null,
+    trade_date: nyDate(), // replaced by the server
   });
-  if (error) throw error;
+  if (error) throw rpcError(error);
 }
 
-/** Cancel a pending order (or remove a row from an example portfolio). */
+/** Cancel a pending order or mix change. */
 export async function cancelTx(txId: string): Promise<boolean> {
   const { data, error } = await supabase.from("transactions").delete().eq("id", txId).select("id");
   if (error) throw error;
   return (data ?? []).length > 0;
+}
+
+export async function renameColumn(portfolioId: string, name: string): Promise<void> {
+  const { error } = await supabase.from("portfolios").update({ name: name.trim().slice(0, 80) }).eq("id", portfolioId);
+  if (error) throw rpcError(error);
 }
 
 // ---- prices -----------------------------------------------------------------

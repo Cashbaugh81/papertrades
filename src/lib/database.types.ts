@@ -1,5 +1,5 @@
 // Generated from the Supabase schema (project rolvlgtxjrcsczinhgbf) on
-// 2026-11-12 after migration core_schema. Regenerate after schema changes.
+// 2026-11-12 after migration comparison_sets (hand-updated; regenerate to confirm). Regenerate after schema changes.
 // Helper generics trimmed; supabase-js only needs `Database`.
 
 export type Json =
@@ -16,42 +16,69 @@ export type Database = {
   };
   public: {
     Tables: {
+      comparison_sets: {
+        Row: {
+          archived_at: string | null;
+          created_at: string;
+          id: string;
+          initial: number;
+          start_date: string;
+          user_id: string;
+          weekly: number;
+          what_if: boolean;
+        };
+        Insert: {
+          archived_at?: string | null;
+          created_at?: string;
+          id?: string;
+          initial: number;
+          start_date: string;
+          user_id?: string;
+          weekly?: number;
+          what_if: boolean;
+        };
+        Update: {
+          archived_at?: string | null;
+          created_at?: string;
+          id?: string;
+          initial?: number;
+          start_date?: string;
+          user_id?: string;
+          weekly?: number;
+          what_if?: boolean;
+        };
+        Relationships: [];
+      };
       portfolios: {
         Row: {
           created_at: string;
-          example: boolean;
           id: string;
-          initial: number;
-          monthly: number;
           name: string;
+          set_id: string;
+          slot: number;
           start_date: string;
           thesis: string;
           user_id: string;
-          weights: Json | null;
         };
         Insert: {
           created_at?: string;
-          example?: boolean;
           id?: string;
-          initial?: number;
-          monthly?: number;
           name: string;
+          set_id: string;
+          slot: number;
           start_date: string;
           thesis?: string;
           user_id?: string;
-          weights?: Json | null;
         };
         Update: {
           created_at?: string;
-          example?: boolean;
           id?: string;
-          initial?: number;
-          monthly?: number;
           name?: string;
+          set_id?: string;
+          slot?: number;
           start_date?: string;
           thesis?: string;
           user_id?: string;
-          weights?: Json | null;
         };
         Relationships: [];
       };
@@ -119,6 +146,7 @@ export type Database = {
           trade_date: string;
           units: number | null;
           user_id: string;
+          weights: Json | null;
         };
         Insert: {
           amount?: number | null;
@@ -139,6 +167,7 @@ export type Database = {
           trade_date: string;
           units?: number | null;
           user_id?: string;
+          weights?: Json | null;
         };
         Update: {
           amount?: number | null;
@@ -159,6 +188,7 @@ export type Database = {
           trade_date?: string;
           units?: number | null;
           user_id?: string;
+          weights?: Json | null;
         };
         Relationships: [
           {
@@ -172,7 +202,20 @@ export type Database = {
       };
     };
     Views: { [_ in never]: never };
-    Functions: { [_ in never]: never };
+    Functions: {
+      create_comparison_set: {
+        Args: { p_start_date: string; p_initial: number; p_weekly: number; p_columns: Json };
+        Returns: string;
+      };
+      add_column: {
+        Args: { p_set: string; p_slot: number; p_name: string; p_weights: Json };
+        Returns: string;
+      };
+      price_series: {
+        Args: { p_tickers: string[]; p_from?: string };
+        Returns: { ticker: string; dates: string[]; closes: number[] }[];
+      };
+    };
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };
   };

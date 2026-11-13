@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { LogOut } from "lucide-react";
 import type { Account } from "@/lib/types";
 import { humanDate } from "@/lib/ledger";
@@ -16,7 +16,6 @@ type Props = {
 };
 
 export default function Shell({ account, asOf, onSignOut, children, stale, notice }: Props) {
-  const { pathname } = useLocation();
 
   return (
     <div className="min-h-screen bg-paper">
@@ -50,10 +49,6 @@ export default function Shell({ account, asOf, onSignOut, children, stale, notic
           </div>
         </div>
 
-        <nav className="mx-auto flex max-w-[1080px] items-center gap-1 px-6">
-          <Tab to="/" active={pathname === "/"} label="Comparison" />
-          <Tab to="/decisions" active={pathname === "/decisions"} label="All decisions" />
-        </nav>
       </header>
 
       {stale && (
@@ -88,20 +83,5 @@ export default function Shell({ account, asOf, onSignOut, children, stale, notic
         </div>
       </footer>
     </div>
-  );
-}
-
-function Tab({ to, active, label }: { to: string; active: boolean; label: string }) {
-  return (
-    <Link
-      to={to}
-      className={`-mb-px border-b-2 px-3 py-2 text-[12px] transition-colors duration-150 ${
-        active
-          ? "border-accent font-medium text-ink"
-          : "border-transparent text-muted hover:text-ink"
-      }`}
-    >
-      {label}
-    </Link>
   );
 }

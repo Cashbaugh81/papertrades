@@ -16,6 +16,7 @@ export type Settlement =
       fill_units: number;
       fill_amount: number;
     }
+  | { id: string; status: "filled"; filled_on: string; fill_amount: number }
   | { id: string; status: "rejected"; filled_on: string; reject_reason: string };
 
 /**
@@ -27,6 +28,12 @@ export function settle(index: PriceIndex, p: Portfolio, pendingIds: Set<string>)
   const out: Settlement[] = [];
   for (const id of pendingIds) {
     const f = state.fills[id];
+    const tx = p.tx.find((t) => t.id === id);
+    if (f && tx?.kind === "rebalance") {
+      // A mix change has no single price: record the day and the money moved.
+      out.push({ id, status: "filled", filled_on: f.date, fill_amount: round(f.amount, 2) });
+      continue;
+    }
     if (f) {
       out.push({
         id,

@@ -6,6 +6,7 @@ import type { Database } from "@/lib/database.types";
 import type { Portfolio, PriceBundle, Tx, TxKind } from "@/lib/types";
 
 export type PortfolioRow = Database["public"]["Tables"]["portfolios"]["Row"];
+export type SetRow = Database["public"]["Tables"]["comparison_sets"]["Row"];
 export type TransactionRow = Database["public"]["Tables"]["transactions"]["Row"];
 
 /**
@@ -19,6 +20,17 @@ export const CALENDAR_TICKER = "SPY";
 const num = (v: number | string | null | undefined): number | undefined =>
   v === null || v === undefined ? undefined : Number(v);
 
+/** A stored mix -> {TICKER: fraction}, dropping anything malformed. */
+export function toWeights(v: unknown): Record<string, number> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const out = Object.fromEntries(
+    Object.entries(v as Record<string, unknown>)
+      .map(([k, x]) => [k, Number(x)] as const)
+      .filter(([, x]) => Number.isFinite(x) && x > 0),
+  );
+  return Object.keys(out).length ? out : undefined;
+}
+
 export function rowToTx(r: TransactionRow): Tx {
   return {
     id: r.id,
@@ -29,27 +41,22 @@ export function rowToTx(r: TransactionRow): Tx {
     amount: num(r.amount),
     units: num(r.units),
     note: r.note ?? undefined,
+    weights: r.kind === "rebalance" ? toWeights(r.weights) : undefined,
   };
 }
 
-export function rowToPortfolio(p: PortfolioRow, txs: TransactionRow[]): Portfolio {
-  const weights =
-    p.weights && typeof p.weights === "object" && !Array.isArray(p.weights)
-      ? Object.fromEntries(
-          Object.entries(p.weights as Record<string, unknown>)
-            .map(([k, v]) => [k, Number(v)] as const)
-            .filter(([, v]) => Number.isFinite(v) && v > 0),
-        )
-      : undefined;
+/**
+ * A column of a comparison set. Its starting amount and weekly amount come
+ * from the set; its first mix is its first rebalance transaction.
+ */
+export function rowToPortfolio(p: PortfolioRow, set: Pick<SetRow, "initial" | "weekly">, txs: TransactionRow[]): Portfolio {
   return {
     id: p.id,
     name: p.name,
     thesis: p.thesis,
     startDate: p.start_date,
-    initial: Number(p.initial),
-    monthly: Number(p.monthly),
-    weights,
-    example: p.example,
+    initial: Number(set.initial),
+    weekly: Number(set.weekly),
     tx: txs
       .filter((t) => t.portfolio_id === p.id)
       .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
@@ -61,7 +68,10 @@ export function rowToPortfolio(p: PortfolioRow, txs: TransactionRow[]): Portfoli
 export function tickersFor(p: Portfolio): string[] {
   const s = new Set<string>([CALENDAR_TICKER]);
   for (const t of Object.keys(p.weights ?? {})) s.add(t);
-  for (const t of p.tx) if (t.ticker) s.add(t.ticker);
+  for (const t of p.tx) {
+    if (t.ticker) s.add(t.ticker);
+    for (const k of Object.keys(t.weights ?? {})) s.add(k);
+  }
   return [...s].sort();
 }
 

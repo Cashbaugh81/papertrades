@@ -266,3 +266,88 @@ describe("review regression on bundled data", () => {
     expect(s.maxDrawdown).toBeCloseTo(-0.127, 3);
   });
 });
+
+describe("weekly deposits and mix changes", () => {
+  // A small market: AAA doubles from day 60, BBB is flat, CCC has a gap.
+  const days = dates.slice(0, 120);
+  const idx = buildIndex({
+    generated: "",
+    source: "mix",
+    series: {
+      AAA: { dates: days, closes: days.map((_, i) => (i < 60 ? 100 : 200)) },
+      BBB: { dates: days, closes: days.map(() => 50) },
+      CCC: { dates: days.filter((_, i) => i !== 31), closes: days.filter((_, i) => i !== 31).map(() => 10) },
+    },
+  });
+  const end = days[days.length - 1];
+  const mix = (id: string, weights: Record<string, number>, over: Partial<Tx> = {}): Tx => ({
+    id,
+    kind: "rebalance",
+    date: days[0],
+    weights,
+    ...over,
+  });
+
+  it("puts the weekly amount in on the first trading day of each later week", () => {
+    const s = computeState(idx, pf({ startDate: days[0], initial: 1_000, weekly: 100, tx: [mix("m", { BBB: 1 })] }), end);
+    // 120 weekdays = 24 weeks; the first week's day is the start (initial only).
+    expect(s.invested).toBe(1_000 + 23 * 100);
+    expect(s.cash).toBeCloseTo(0, 6); // every deposit followed the mix
+    expect(s.volatility).toBeCloseTo(0, 12);
+  });
+
+  it("a what-if's first mix (no placedAt) fills at the start date's close", () => {
+    const s = computeState(idx, pf({ startDate: days[0], initial: 1_000, tx: [mix("m", { AAA: 0.5, BBB: 0.5 })] }), end);
+    expect(s.fills.m.date).toBe(days[0]);
+    expect(s.fills.m.amount).toBe(1_000);
+    const units = Object.fromEntries(s.holdings.map((h) => [h.ticker, h.units]));
+    expect(units.AAA).toBeCloseTo(5, 9); // $500 at 100
+    expect(units.BBB).toBeCloseTo(10, 9); // $500 at 50
+  });
+
+  it("a mix change moves everything at the next close, valued at that close", () => {
+    const change = mix("c", { BBB: 1 }, { date: days[70], placedAt: nyTime(days[70], 17) });
+    const s = computeState(idx, pf({ startDate: days[0], initial: 1_000, tx: [mix("m", { AAA: 1 }), change] }), end);
+    // 10 AAA units bought at 100 are worth 2,000 by day 71; all moved to BBB at 50.
+    expect(s.fills.c.date).toBe(days[71]);
+    expect(s.fills.c.amount).toBeCloseTo(2_000, 6);
+    expect(s.holdings).toHaveLength(1);
+    expect(s.holdings[0]).toMatchObject({ ticker: "BBB" });
+    expect(s.holdings[0].units).toBeCloseTo(40, 9);
+    expect(s.currentWeights).toEqual({ BBB: 1 });
+  });
+
+  it("deposits after a mix change follow the new mix", () => {
+    const change = mix("c", { BBB: 1 }, { date: days[2], placedAt: nyTime(days[2], 10) });
+    const s = computeState(
+      idx,
+      pf({ startDate: days[0], initial: 1_000, weekly: 100, tx: [mix("m", { AAA: 1 }), change] }),
+      days[30],
+    );
+    expect(s.holdings.map((h) => h.ticker)).toEqual(["BBB"]);
+  });
+
+  it("a mix change waits for every ticker in it to have a close", () => {
+    // CCC has no close on day 31; an order placed after day 30's close waits for day 32.
+    const change = mix("c", { CCC: 0.5, BBB: 0.5 }, { date: days[30], placedAt: nyTime(days[30], 17) });
+    const s = computeState(idx, pf({ startDate: days[0], initial: 1_000, tx: [mix("m", { BBB: 1 }), change] }), end);
+    expect(s.fills.c.date).toBe(days[32]);
+  });
+
+  it("a mix change whose close hasn't happened is pending, and keeps the old mix", () => {
+    const change = mix("c", { AAA: 1 }, { date: end, placedAt: nyTime(end, 17) });
+    const s = computeState(idx, pf({ startDate: days[0], initial: 1_000, tx: [mix("m", { BBB: 1 }), change] }), end);
+    expect(s.pending).toEqual([
+      { txId: "c", kind: "rebalance", amount: 0, weights: { AAA: 1 }, placedAt: change.placedAt },
+    ]);
+    expect(s.currentWeights).toEqual({ BBB: 1 });
+  });
+
+  it("a live first mix leaves the money as cash until its close", () => {
+    const first = mix("m", { AAA: 1 }, { date: end, placedAt: nyTime(end, 17) });
+    const s = computeState(idx, pf({ startDate: end, initial: 1_000, weekly: 100, tx: [first] }), end);
+    expect(s.value).toBe(1_000);
+    expect(s.holdings).toHaveLength(0);
+    expect(s.pending.map((o) => o.kind)).toEqual(["rebalance"]);
+  });
+});

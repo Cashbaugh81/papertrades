@@ -1,30 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
+import { BrowserRouter } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
-import type { Account, Portfolio, PortfolioState, PriceBundle } from "@/lib/types";
-import { buildIndex, closeOn, type PriceIndex } from "@/lib/prices";
-import { computeAll, baselineId } from "@/lib/ledger";
+import type { Account, PortfolioState, PriceBundle } from "@/lib/types";
+import { buildIndex } from "@/lib/prices";
+import { computeState } from "@/lib/ledger";
 import { lastCutoff, nyDate } from "@/lib/market";
-import { tickersFor } from "@/lib/rows";
-import { exampleStart, STARTER_TICKERS } from "@/lib/starters";
+import { CALENDAR_TICKER, tickersFor } from "@/lib/rows";
 import { supabase } from "@/lib/supabase";
 import {
+  addColumn,
   cancelTx,
+  changeMix,
   fetchPrices,
-  loadPortfolios,
+  loadActiveSet,
   mergeBundles,
-  placeOrder,
-  seedExamplesOnce,
   signOut,
-  startFresh,
   toAccount,
-  type OrderInput,
+  type ActiveSet,
+  type Mix,
   type TickerInfo,
 } from "@/lib/api";
 import AuthPage from "@/pages/AuthPage";
-import ComparisonPage from "@/pages/ComparisonPage";
-import PortfolioPage from "@/pages/PortfolioPage";
-import DecisionsPage from "@/pages/DecisionsPage";
+import DashboardPage from "@/pages/DashboardPage";
+import SetupPage, { DEFAULT_FUND } from "@/pages/SetupPage";
 import Shell from "@/components/Shell";
 
 export default function App() {
@@ -95,7 +93,9 @@ function isStale(lastDate: string): boolean {
 }
 
 function SignedIn({ account }: { account: Account }) {
-  const [portfolios, setPortfolios] = useState<Portfolio[] | null>(null);
+  // undefined while loading; null when the user hasn't started a comparison.
+  const [set, setSet] = useState<ActiveSet | null | undefined>(undefined);
+  const [setup, setSetup] = useState<{ initial?: SetupInitial } | null>(null);
   const [bundle, setBundle] = useState<PriceBundle | null>(null);
   const [info, setInfo] = useState<Record<string, TickerInfo>>({});
   const loadedFrom = useRef<string | null>(null);
@@ -103,41 +103,26 @@ function SignedIn({ account }: { account: Account }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    setPortfolios(await loadPortfolios());
+    setSet(await loadActiveSet());
   }, []);
 
-  // Portfolios: load, seeding the examples on an account's first visit.
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      let ps = await loadPortfolios();
-      if (await seedExamplesOnce(ps)) ps = await loadPortfolios();
-      if (alive) setPortfolios(ps);
-    })().catch((e) => alive && setFatal(errText(e)));
-    return () => {
-      alive = false;
-    };
-  }, []);
+    reload().catch((e) => setFatal(errText(e)));
+  }, [reload]);
 
-  // Prices: everything the portfolios need, plus the starter tickers as
-  // suggestions, from just before the earliest start date.
+  // Prices for every ticker in the comparison (plus SPY, the calendar, and the
+  // default fund), from just before its start date.
   const needed = useMemo(() => {
-    const s = new Set<string>(STARTER_TICKERS);
-    for (const p of portfolios ?? []) for (const t of tickersFor(p)) s.add(t);
+    const s = new Set<string>([CALENDAR_TICKER, DEFAULT_FUND]);
+    for (const c of set?.columns ?? []) for (const t of tickersFor(c.portfolio)) s.add(t);
     return [...s].sort();
-  }, [portfolios]);
-  const from = useMemo(() => {
-    const starts = (portfolios ?? []).map((p) => p.startDate);
-    const earliest = starts.length ? starts.reduce((a, b) => (a < b ? a : b)) : exampleStart(nyDate());
-    return lookback(earliest);
-  }, [portfolios]);
+  }, [set]);
+  const from = useMemo(() => lookback(set?.startDate ?? nyDate()), [set]);
 
   useEffect(() => {
-    if (!portfolios) return;
+    if (set === undefined) return;
     const widen = !loadedFrom.current || from < loadedFrom.current;
-    const missing = widen
-      ? needed
-      : needed.filter((t) => !bundle?.series[t] && info[t]?.status !== "not_found");
+    const missing = widen ? needed : needed.filter((t) => !bundle?.series[t] && info[t]?.status !== "not_found");
     if (missing.length === 0) return;
     let alive = true;
     fetchPrices(missing, widen ? from : loadedFrom.current!)
@@ -157,11 +142,11 @@ function SignedIn({ account }: { account: Account }) {
     };
     // `bundle` and `info` are read to find what's missing, not to trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portfolios, needed, from]);
+  }, [set, needed, from]);
 
   const index = useMemo(() => (bundle ? buildIndex(bundle) : null), [bundle]);
 
-  /** Load one ticker on demand (the trade ticket). */
+  /** Look a ticker up (and load its prices) as it's typed into a mix. */
   const lookup = useCallback(
     async (ticker: string): Promise<TickerInfo | undefined> => {
       const r = await fetchPrices([ticker], loadedFrom.current ?? from);
@@ -172,149 +157,89 @@ function SignedIn({ account }: { account: Account }) {
     [from],
   );
 
-  const handlers = useMemo(
-    () => ({
-      onTrade: async (portfolioId: string, order: OrderInput) => {
-        await placeOrder(portfolioId, order);
-        await reload();
-      },
-      onDeleteTx: (txId: string) => {
-        cancelTx(txId)
-          .then((gone) => {
-            if (!gone) setNotice("That trade is part of the record now and can't be removed.");
-            return reload();
-          })
-          .catch((e) => setNotice(errText(e)));
-      },
-      onStartFresh: () => {
-        startFresh()
-          .then(reload)
-          .catch((e) => setNotice(errText(e)));
-      },
-      onSignOut: () => void signOut(),
-    }),
-    [reload],
+  const suggestions = useMemo(
+    () => [...new Set([...SUGGESTED, ...Object.keys(info).filter((t) => info[t].status === "ok")])].sort(),
+    [info],
   );
 
-  if (fatal) {
-    return <Splash text="Something didn't load" detail={`${fatal} Try reloading the page.`} />;
-  }
-  if (!portfolios || !index) return <Splash text="Loading the ledger…" />;
+  const states = useMemo(() => {
+    const m = new Map<string, PortfolioState>();
+    if (!index || !set) return m;
+    for (const c of set.columns) m.set(c.portfolio.id, computeState(index, c.portfolio, index.lastDate));
+    return m;
+  }, [index, set]);
 
-  return (
-    <AppInner
-      account={account}
-      portfolios={portfolios}
-      index={index}
-      lookup={lookup}
-      notice={notice}
-      onDismissNotice={() => setNotice(null)}
-      {...handlers}
-    />
-  );
-}
+  if (fatal) return <Splash text="Something didn't load" detail={`${fatal} Try reloading the page.`} />;
+  if (set === undefined || !index) return <Splash text="Loading the ledger…" />;
 
-function AppInner({
-  account,
-  portfolios,
-  index,
-  lookup,
-  notice,
-  onDismissNotice,
-  onTrade,
-  onDeleteTx,
-  onStartFresh,
-  onSignOut,
-}: {
-  account: Account;
-  portfolios: Portfolio[];
-  index: PriceIndex;
-  lookup: (ticker: string) => Promise<TickerInfo | undefined>;
-  notice: string | null;
-  onDismissNotice: () => void;
-  onTrade: (portfolioId: string, order: OrderInput) => Promise<void>;
-  onDeleteTx: (txId: string) => void;
-  onStartFresh: () => void;
-  onSignOut: () => void;
-}) {
-  const states = useMemo(() => computeAll(index, portfolios, index.lastDate), [index, portfolios]);
-  const base = baselineId(states);
-
-  const priceFor = useCallback((ticker: string) => closeOn(index, ticker, index.lastDate), [index]);
-
-  return (
+  const shell = (children: React.ReactNode) => (
     <Shell
       account={account}
       asOf={index.lastDate}
-      onSignOut={onSignOut}
+      onSignOut={() => void signOut()}
       stale={isStale(index.lastDate)}
-      notice={notice ? { text: notice, onDismiss: onDismissNotice } : null}
+      notice={notice ? { text: notice, onDismiss: () => setNotice(null) } : null}
     >
-      <Routes>
-        <Route
-          path="/"
-          element={
-            <ComparisonPage states={states} portfolios={portfolios} index={index} onStartFresh={onStartFresh} />
-          }
-        />
-        <Route path="/decisions" element={<DecisionsPage portfolios={portfolios} states={states} index={index} />} />
-        <Route
-          path="/p/:id"
-          element={
-            <PortfolioRoute
-              portfolios={portfolios}
-              states={states}
-              index={index}
-              baselineId={base}
-              priceFor={priceFor}
-              lookup={lookup}
-              onTrade={onTrade}
-              onDeleteTx={onDeleteTx}
-            />
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      {children}
     </Shell>
   );
-}
 
-function PortfolioRoute({
-  portfolios,
-  states,
-  index,
-  baselineId: base,
-  priceFor,
-  lookup,
-  onTrade,
-  onDeleteTx,
-}: {
-  portfolios: Portfolio[];
-  states: PortfolioState[];
-  index: PriceIndex;
-  baselineId?: string;
-  priceFor: (t: string) => number | undefined;
-  lookup: (ticker: string) => Promise<TickerInfo | undefined>;
-  onTrade: (portfolioId: string, order: OrderInput) => Promise<void>;
-  onDeleteTx: (txId: string) => void;
-}) {
-  const { id } = useParams<{ id: string }>();
-  const portfolio = portfolios.find((p) => p.id === id);
-  const state = states.find((s) => s.id === id);
+  if (!set || setup) {
+    return shell(
+      <SetupPage
+        key={setup ? "again" : "first"}
+        info={info}
+        lookup={lookup}
+        suggestions={suggestions}
+        initial={setup?.initial}
+        onCancel={set ? () => setSetup(null) : undefined}
+        onCreated={() => {
+          setSetup(null);
+          reload().catch((e) => setNotice(errText(e)));
+        }}
+      />,
+    );
+  }
 
-  if (!portfolio || !state) return <Navigate to="/" replace />;
+  const mixesBySlot = [1, 2, 3].map((slot) => {
+    const c = set.columns.find((x) => x.slot === slot);
+    const s = c ? states.get(c.portfolio.id) : undefined;
+    return s?.currentWeights ?? c?.portfolio.tx.find((t) => t.kind === "rebalance")?.weights;
+  });
 
-  return (
-    <PortfolioPage
-      portfolio={portfolio}
-      state={state}
-      index={index}
+  return shell(
+    <DashboardPage
+      set={set}
       states={states}
-      baseline={states.find((s) => s.id === base)}
-      onTrade={(o) => onTrade(portfolio.id, o)}
-      onDeleteTx={onDeleteTx}
-      priceFor={priceFor}
+      info={info}
       lookup={lookup}
-    />
+      suggestions={suggestions}
+      pricesThrough={index.lastDate}
+      onChangeMix={async (pid, mix, note) => {
+        await changeMix(pid, mix, note);
+        await reload();
+      }}
+      onAddColumn={async (slot, mix) => {
+        await addColumn(set.id, slot, mix);
+        await reload();
+      }}
+      onCancelTx={(txId) => {
+        cancelTx(txId)
+          .then((gone) => {
+            if (!gone) setNotice("That has already happened and can't be cancelled.");
+            return reload();
+          })
+          .catch((e) => setNotice(errText(e)));
+      }}
+      onChangeDate={() =>
+        setSetup({ initial: { amount: set.initial, weekly: set.weekly, startDate: set.startDate, mixes: mixesBySlot } })
+      }
+      onStartOver={() => setSetup({ initial: undefined })}
+    />,
   );
 }
+
+/** Common funds offered as suggestions while typing a ticker. */
+const SUGGESTED = ["VTI", "VOO", "SPY", "QQQ", "DIA", "BND", "VXUS", "SCHD", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"];
+
+type SetupInitial = { amount: number; weekly: number; startDate?: string; mixes?: (Mix | undefined)[] };

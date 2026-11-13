@@ -15,7 +15,12 @@ export type Account = {
   name: string;
 };
 
-export type TxKind = "deposit" | "buy" | "sell";
+/**
+ * `rebalance` is a mix change: at its fill close, all of the portfolio's money
+ * (cash and holdings) is moved into `weights`, and later contributions follow
+ * that mix too. A portfolio's first mix is a rebalance as well.
+ */
+export type TxKind = "deposit" | "buy" | "sell" | "rebalance";
 
 export type Tx = {
   id: string;
@@ -42,6 +47,8 @@ export type Tx = {
   price?: number;
   amount?: number;
   note?: string;
+  /** For kind = rebalance: ticker -> fraction, summing to 1. */
+  weights?: Record<string, number>;
 };
 
 export type Portfolio = {
@@ -51,10 +58,14 @@ export type Portfolio = {
   thesis: string;
   startDate: string;
   initial: number;
-  monthly: number;
+  /** Deposited on the first trading day of each month after the start. */
+  monthly?: number;
+  /** Deposited on the first trading day of each week after the start. */
+  weekly?: number;
   tx: Tx[];
   /**
-   * Where each monthly contribution goes, as fractions summing to 1.
+   * Where contributions go before any rebalance has filled, as fractions
+   * summing to 1. After a rebalance fills, its mix takes over.
    *
    * Without this, a contribution lands in cash and sits there — which turns a
    * "same dollars" comparison into "invest once, then hoard cash". The weights
@@ -92,9 +103,13 @@ export type Fill = {
 
 export type PendingOrder = {
   txId: string;
-  kind: "buy" | "sell";
-  ticker: string;
+  kind: "buy" | "sell" | "rebalance";
+  /** Absent for a rebalance. */
+  ticker?: string;
+  /** Dollars for buys and sells; 0 for a rebalance (it moves everything). */
   amount: number;
+  /** For a rebalance: the new mix. */
+  weights?: Record<string, number>;
   placedAt: string;
 };
 
@@ -128,6 +143,8 @@ export type PortfolioState = {
   pending: PendingOrder[];
   /** How each filled order filled, by transaction id. */
   fills: Record<string, Fill>;
+  /** The mix currently in force (the last filled rebalance, else the portfolio's weights). */
+  currentWeights?: Record<string, number>;
   /** Orders that reached their close but could not be filled, by transaction id. */
   rejections: Record<string, { date: string; reason: string }>;
   lastDate: string;

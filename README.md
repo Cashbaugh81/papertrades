@@ -1,8 +1,13 @@
 # Ledger: the same dollars, different paths
 
-A personal paper-trading tool. Start with one amount of cash and one monthly contribution, run several portfolios side by side on exactly the same dollars, and watch how far apart they end up. Return is always shown next to drawdown, volatility and the time window it was measured over.
+A personal paper-trading tool for seeing what real investing might look like. You say how much you'd invest (a starting amount and a weekly amount), then compare up to three portfolios that each get that same money. Portfolio 1 starts as the whole US market (VTI). Portfolios 2 and 3 are yours to fill: one ticker, or a mix with percentages.
 
-Accounts and portfolios are stored in Supabase, so they sync across devices. Prices are daily adjusted closes from Tiingo, fetched and cached on the server. See [docs/BUILD-RECORD.md](docs/BUILD-RECORD.md) for the original research and how the first version was built.
+- **Start date: Today** (the default) builds a real record. Money is invested at the next market close, at prices nobody knew when you decided.
+- **Start date in the past** replays history as a clearly labelled *what-if*. It's useful for seeing what would have happened, but the choices are made with hindsight.
+- **Changing a mix** later moves all of that portfolio's money into the new mix at the next close and is logged with an optional note. Weekly deposits follow the current mix.
+- Return is always shown next to the biggest drop and volatility, both measured with deposits taken out.
+
+Accounts are private: see the sign-up gate below. Data lives in Supabase and syncs across devices. Prices are daily adjusted closes from Tiingo, fetched and cached on the server. [docs/BUILD-RECORD.md](docs/BUILD-RECORD.md) holds the original research.
 
 ## Run locally
 
@@ -18,9 +23,9 @@ The app talks to the live Supabase project by default. To point it at another pr
 
 1. ~~**Trades can use hindsight.**~~ Fixed: an order records when it was placed and fills at the first market close after that moment. Until that close is in the data it shows as pending and its cash is held.
 2. ~~**Volatility and drawdown include contributions.**~~ Fixed: both are measured on time-weighted returns. VTI/BND from 2023 now shows 10.4% volatility and a −12.7% max drawdown.
-3. **Only one time window is shown, and the data starts in 2019.** The research's own rule says to show at least two windows side by side, including 2000–2008.
+3. ~~**Only one time window is shown.**~~ Replaced by the start-date picker: any date back to January 2000 can be replayed as a what-if (prices now go back to 2000).
 4. ~~**Data is stored in the browser only.**~~ Fixed: accounts, portfolios and orders are stored in Supabase.
-5. **Target weights never rebalance.** They only apply to new contributions, so concentrated portfolios drift over time.
+5. ~~**Target weights never rebalance.**~~ Changing a mix now moves all of a portfolio's money into it at the next close. Between changes, a mix still drifts as prices move; it isn't topped back up automatically.
 
 ## Server (Supabase)
 
