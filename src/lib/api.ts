@@ -22,14 +22,29 @@ export function appUrl(): string {
   return `${window.location.origin}${import.meta.env.BASE_URL}`;
 }
 
-export async function signUp(email: string, password: string, name: string): Promise<"signed-in" | "confirm-email"> {
-  const { data, error } = await supabase.auth.signUp({
-    email: email.trim(),
-    password,
-    options: { data: { name: name.trim() }, emailRedirectTo: appUrl() },
+/**
+ * Create an account through the `signup` function, the only route the
+ * database accepts (this is a private site). The server checks the password
+ * against its gate and confirms the account immediately; then we sign in.
+ */
+export async function signUp(email: string, password: string, name: string): Promise<void> {
+  const { error } = await supabase.functions.invoke("signup", {
+    body: { email: email.trim(), password, name: name.trim() },
   });
-  if (error) throw new Error(friendlyAuthError(error.message));
-  return data.session ? "signed-in" : "confirm-email";
+  if (error) {
+    let message = "Sign-up failed. Try again.";
+    const ctx = (error as { context?: unknown }).context;
+    if (ctx instanceof Response) {
+      try {
+        const body = (await ctx.json()) as { error?: string };
+        if (body.error) message = body.error;
+      } catch {
+        /* keep the generic message */
+      }
+    }
+    throw new Error(message);
+  }
+  await signIn(email, password);
 }
 
 export async function signIn(email: string, password: string): Promise<void> {
@@ -54,7 +69,7 @@ export async function signOut(): Promise<void> {
 function friendlyAuthError(msg: string): string {
   if (/invalid login credentials/i.test(msg)) return "That email and password don't match an account.";
   if (/email not confirmed/i.test(msg)) return "Confirm your email first: the link is in your inbox.";
-  if (/signups? not allowed|signup is disabled/i.test(msg)) return "New accounts are closed on this site.";
+  if (/signups? not allowed|signup is disabled|not a public site/i.test(msg)) return "this is not a public site for use";
   if (/already registered/i.test(msg)) return "An account with that email already exists. Sign in instead.";
   return msg;
 }

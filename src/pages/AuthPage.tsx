@@ -33,12 +33,7 @@ export default function AuthPage({ initialMode = "in", onResetDone }: Props) {
     setNotice(null);
     try {
       if (mode === "up") {
-        const r = await signUp(email, secret, name);
-        if (r === "confirm-email") {
-          setNotice(`Check ${email.trim()} for a confirmation link, then sign in.`);
-          setMode("in");
-          setSecret("");
-        }
+        await signUp(email, secret, name); // signs in on success
       } else if (mode === "in") {
         await signIn(email, secret);
       } else if (mode === "forgot") {
