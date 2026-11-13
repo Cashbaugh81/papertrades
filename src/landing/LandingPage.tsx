@@ -89,8 +89,11 @@ export default function LandingPage() {
             </p>
             <h1
               id="hero-title"
-              style={{ ...serif, fontSize: "clamp(40px, 6vw, 72px)" }}
-              className="m-0 max-w-[820px] font-normal leading-[1.02] tracking-[-0.02em]"
+              // One line at every width: the title is about 11.3 times as wide as
+              // its font size, so size it from the column width (12 leaves room
+              // for the fallback font), capped at 72px.
+              style={{ ...serif, fontSize: "min(72px, calc((min(100vw, 1180px) - 48px) / 12))" }}
+              className="m-0 whitespace-nowrap font-normal leading-[1.02] tracking-[-0.02em]"
             >
               Test your stock skills for free.
             </h1>
