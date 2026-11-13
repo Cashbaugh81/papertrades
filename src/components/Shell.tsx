@@ -59,8 +59,8 @@ export default function Shell({ account, asOf, onSignOut, children, stale }: Pro
             <span className="mt-1 size-1.5 shrink-0 rounded-full bg-flag" />
             <span>
               Prices are a fixed snapshot, not a live feed. This build ships daily closes
-              through {humanDate(asOf)} and nothing refreshes on its own. A trade dated after
-              the newest close fills at that close.
+              through {humanDate(asOf)} and nothing refreshes on its own yet. Orders placed now
+              stay pending until a later close is added.
             </span>
           </div>
         </div>
@@ -70,7 +70,7 @@ export default function Shell({ account, asOf, onSignOut, children, stale }: Pro
 
       <footer className="border-t border-rule">
         <div className="mx-auto max-w-[1080px] px-6 py-6 text-[11px] leading-relaxed text-muted">
-          Paper portfolios only. No brokerage connection, no orders, no real money.
+          Paper portfolios only. No brokerage connection, no real orders, no real money.
           Accounts and trades are stored in this browser alone — not synced, not backed up.
         </div>
       </footer>

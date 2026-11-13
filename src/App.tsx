@@ -95,8 +95,7 @@ function Root() {
       index={index}
       persist={persist}
       onStartFresh={() => {
-        const today = index.lastDate;
-        const next = startFresh(data, today);
+        const next = startFresh(data);
         persist({ ...next, account });
       }}
       onSignOut={() => {

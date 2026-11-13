@@ -23,11 +23,25 @@ export type TxKind = "deposit" | "buy" | "sell";
 export type Tx = {
   id: string;
   kind: TxKind;
-  /** Trading day the transaction settles on, YYYY-MM-DD. */
+  /**
+   * Calendar date the transaction was entered, YYYY-MM-DD (New York time).
+   * For orders with `placedAt` this is display-only: the fill day comes from
+   * `placedAt`. Legacy rows without `placedAt` (the seeded examples) fill at
+   * this date's close.
+   */
   date: string;
+  /**
+   * When the order was placed, as an ISO timestamp. An order fills at the
+   * first market close strictly after this moment, never at a close that was
+   * already known when it was placed.
+   */
+  placedAt?: string;
   ticker?: string;
   units?: number;
-  /** Fill price per unit at entry. Deposits leave this undefined. */
+  /**
+   * Legacy only: a fill price stored on the row. Orders with `placedAt`
+   * ignore it; their fill price always comes from the close they fill at.
+   */
   price?: number;
   amount?: number;
   note?: string;
@@ -75,6 +89,22 @@ export type Holding = {
   cost: number;
 };
 
+export type Fill = {
+  /** Trading day whose close the order filled at. */
+  date: string;
+  price: number;
+  units: number;
+  amount: number;
+};
+
+export type PendingOrder = {
+  txId: string;
+  kind: "buy" | "sell";
+  ticker: string;
+  amount: number;
+  placedAt: string;
+};
+
 export type PortfolioState = {
   id: string;
   name: string;
@@ -88,9 +118,23 @@ export type PortfolioState = {
   returnOnInvested: number;
   maxDrawdown: number;
   holdings: Holding[];
-  /** Daily returns, used for volatility. */
+  /**
+   * Drawdown from peak, per day, measured on the time-weighted index (so a
+   * deposit never hides a fall and a withdrawal never creates one).
+   */
   drawdownSeries: number[];
+  /** Growth of $1 with every deposit stripped out: the time-weighted index. */
+  twrIndex: number[];
+  /** Total time-weighted return over the window. */
+  twr: number;
+  /** Annualised volatility of daily time-weighted returns. */
   volatility: number;
+  /** Cash minus what pending buy orders have reserved. */
+  availableCash: number;
+  /** Orders placed but not yet filled, because their close has not happened (or is not in the data yet). */
+  pending: PendingOrder[];
+  /** How each filled order filled, by transaction id. */
+  fills: Record<string, Fill>;
   lastDate: string;
   /** Trades that could not be filled (insufficient cash, no holding). Surfaced in the UI. */
   rejected: string[];

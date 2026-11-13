@@ -1,13 +1,13 @@
 import { Link } from "react-router-dom";
 import type { Portfolio, PortfolioState } from "@/lib/types";
 import type { PriceIndex } from "@/lib/prices";
-import { closeOn } from "@/lib/prices";
 import { humanDate, money } from "@/lib/ledger";
 
 type Props = {
   portfolios: Portfolio[];
   states: PortfolioState[];
-  index: PriceIndex;
+  /** Kept for callers; fills now come from each portfolio's state. */
+  index?: PriceIndex;
 };
 
 /**
@@ -17,7 +17,7 @@ type Props = {
  * your own urges. You cannot see a pattern in one portfolio's history at a time;
  * you see it when your chip buys and your healthcare buys sit on the same page.
  */
-export default function DecisionsPage({ portfolios, states, index }: Props) {
+export default function DecisionsPage({ portfolios, states }: Props) {
   const rows = portfolios
     .flatMap((p) => {
       const state = states.find((s) => s.id === p.id);
@@ -25,7 +25,8 @@ export default function DecisionsPage({ portfolios, states, index }: Props) {
         tx: t,
         portfolioId: p.id,
         portfolioName: state?.name ?? p.name,
-        price: t.price ?? (t.ticker ? closeOn(index, t.ticker, t.date) : undefined),
+        fill: state?.fills[t.id],
+        pending: !!state?.pending.some((o) => o.txId === t.id),
       }));
     })
     .sort((a, b) => (a.tx.date < b.tx.date ? 1 : a.tx.date > b.tx.date ? -1 : 0));
@@ -63,7 +64,7 @@ export default function DecisionsPage({ portfolios, states, index }: Props) {
                 </td>
               </tr>
             )}
-            {rows.map(({ tx, portfolioId, portfolioName, price }) => (
+            {rows.map(({ tx, portfolioId, portfolioName, fill, pending }) => (
               <tr key={tx.id} className="border-b border-rule/70">
                 <td className="whitespace-nowrap py-2.5 pr-3 text-muted">{humanDate(tx.date)}</td>
                 <td className="px-3 py-2.5">
@@ -80,12 +81,28 @@ export default function DecisionsPage({ portfolios, states, index }: Props) {
                       tx.kind === "buy" ? "text-gain" : tx.kind === "sell" ? "text-loss" : "text-muted"
                     }
                   >
-                    {tx.kind === "buy" ? "Bought" : tx.kind === "sell" ? "Sold" : "Deposited"}
+                    {pending
+                      ? tx.kind === "buy"
+                        ? "Buy order"
+                        : "Sell order"
+                      : tx.kind === "buy"
+                        ? "Bought"
+                        : tx.kind === "sell"
+                          ? "Sold"
+                          : "Deposited"}
                   </span>{" "}
                   <span className="font-medium">{tx.ticker ?? ""}</span>
                 </td>
                 <td className="num px-3 py-2.5">{tx.amount ? money(tx.amount, 2) : "—"}</td>
-                <td className="num px-3 py-2.5 text-muted">{price ? money(price, 2) : "—"}</td>
+                <td className="num px-3 py-2.5 text-muted">
+                  {fill ? (
+                    <span title={`Filled at the ${humanDate(fill.date)} close`}>{money(fill.price, 2)}</span>
+                  ) : pending ? (
+                    <span className="text-[11px] uppercase tracking-wide">pending</span>
+                  ) : (
+                    "—"
+                  )}
+                </td>
                 <td className="max-w-64 px-3 py-2.5 text-muted">
                   {tx.note ?? <span className="text-rule">—</span>}
                 </td>
@@ -96,8 +113,9 @@ export default function DecisionsPage({ portfolios, states, index }: Props) {
       </section>
 
       <p className="max-w-3xl border-t border-rule pt-4 text-[12px] leading-relaxed text-muted">
-        Fills are the closing price on the trade date, from the bundled daily series. A decision
-        recorded on a weekend or holiday fills at the previous trading day's close.
+        An order fills at the first market close after you place it — never at a price that was
+        already known when you decided. Until that close is in the data, the order shows as
+        pending and its cash is set aside.
       </p>
     </div>
   );

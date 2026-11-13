@@ -4,7 +4,6 @@
     "lib": ["ES2023", "DOM"],
     "module": "esnext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] },
     "types": ["node"],
     "allowImportingTsExtensions": true,
@@ -12,5 +11,5 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["checks/**/*.ts"]
+  "include": ["checks/**/*.ts", "src/**/*.test.ts", "vitest.config.ts"]
 }

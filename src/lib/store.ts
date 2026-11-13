@@ -1,4 +1,5 @@
 import type { Account, AccountData, Portfolio, Tx } from "@/lib/types";
+import { nyDate } from "@/lib/market";
 
 /**
  * Storage layer.
@@ -115,9 +116,17 @@ export function nextId(prefix: string): string {
  * Replace the seeded examples with a clean set starting today.
  * Anything the user built themselves is left alone.
  */
-export function startFresh(data: AccountData, today: string): AccountData {
+export function startFresh(data: AccountData, now: Date = new Date()): AccountData {
   const mine = data.portfolios.filter((p) => !p.example);
-  const fresh = starterPortfolios(today).map((p) => ({ ...p, example: false }));
+  const placedAt = now.toISOString();
+  const today = nyDate(now);
+  // The starter buys become real orders: they fill at the next close, like
+  // any other decision made today.
+  const fresh = starterPortfolios(today).map((p) => ({
+    ...p,
+    example: false,
+    tx: p.tx.map((t) => ({ ...t, placedAt })),
+  }));
   return { ...data, portfolios: [...mine, ...fresh] };
 }
 

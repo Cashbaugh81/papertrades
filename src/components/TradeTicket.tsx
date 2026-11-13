@@ -3,19 +3,23 @@ import { ArrowDownLeft, ArrowUpRight, Info, Plus } from "lucide-react";
 import type { PortfolioState, Tx } from "@/lib/types";
 import { humanDate, money } from "@/lib/ledger";
 import { nextId } from "@/lib/store";
+import { nyDate } from "@/lib/market";
 
 type Mode = "buy" | "sell" | "cash";
 
 type Props = {
   state: PortfolioState;
-  /** Last trading day present in the price data. Trades fill at this close. */
-  fillDate: string;
+  /**
+   * Last trading day present in the price data. Used only to label the
+   * estimate: orders fill at the next close after they are placed.
+   */
+  lastClose: string;
   priceFor: (ticker: string) => number | undefined;
   tickers: string[];
   onTrade: (tx: Tx) => void;
 };
 
-export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrade }: Props) {
+export default function TradeTicket({ state, lastClose, priceFor, tickers, onTrade }: Props) {
   const [mode, setMode] = useState<Mode>("buy");
   const [ticker, setTicker] = useState(state.holdings[0]?.ticker ?? tickers[0] ?? "");
   const [amount, setAmount] = useState("500");
@@ -31,13 +35,21 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
     return numeric / price;
   }, [mode, price, numeric]);
 
-  const cashShort = mode === "buy" && numeric > state.cash + 1e-6;
-  const unitsShort = mode === "sell" && price !== undefined && numeric / price > held + 1e-9;
+  // Cash already promised to pending buys cannot be spent twice.
+  const cash = state.availableCash;
+  const pendingSells = state.pending
+    .filter((o) => o.kind === "sell" && o.ticker === ticker)
+    .reduce((a, o) => a + o.amount, 0);
+  const cashShort = mode === "buy" && numeric > cash + 1e-6;
+  // A sell is sized in dollars and fills at the next close, so this check uses
+  // the last close as an estimate; the engine caps it at what is actually held.
+  const unitsShort =
+    mode === "sell" && price !== undefined && (numeric + pendingSells) / price > held * 1.0001 + 1e-9;
   const needsPrice = mode !== "cash";
   const invalid =
     !(numeric > 0) || (needsPrice && !price) || cashShort || unitsShort;
 
-  const noCash = state.cash < 1 && mode === "buy";
+  const noCash = cash < 1 && mode === "buy";
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -48,11 +60,15 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
       return;
     }
 
+    const placedAt = new Date().toISOString();
+    const date = nyDate(Date.parse(placedAt));
+
     if (mode === "cash") {
       onTrade({
         id: nextId("tx"),
         kind: "deposit",
-        date: fillDate,
+        date,
+        placedAt,
         amount: numeric,
         note: note.trim() || undefined,
       });
@@ -62,12 +78,12 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
     }
 
     if (!price) {
-      setError(`No price available for ${ticker} on ${humanDate(fillDate)}.`);
+      setError(`No price data for ${ticker}.`);
       return;
     }
     if (cashShort) {
       setError(
-        `That needs ${money(numeric)} but this portfolio holds ${money(state.cash)} in cash. ` +
+        `That needs ${money(numeric)} but this portfolio has ${money(cash)} of cash free. ` +
           `Use "Add cash" to top it up, or sell something first.`,
       );
       return;
@@ -77,14 +93,14 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
       return;
     }
 
+    // No price is stored: the order fills at the first close after `placedAt`.
     onTrade({
       id: nextId("tx"),
       kind: mode,
-      date: fillDate,
+      date,
+      placedAt,
       ticker,
-      price,
       amount: numeric,
-      ...(mode === "sell" ? { units: numeric / price } : {}),
       note: note.trim() || undefined,
     });
     setNote("");
@@ -94,7 +110,7 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
   const submitLabel =
     mode === "cash"
       ? `Add ${money(numeric || 0)} of cash`
-      : `${mode === "buy" ? "Buy" : "Sell"} ${ticker || "—"} at the ${humanDate(fillDate)} close`;
+      : `Place order: ${mode === "buy" ? "buy" : "sell"} ${ticker || "—"} at the next close`;
 
   return (
     <form
@@ -103,7 +119,7 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
     >
       <div className="mb-3 flex items-baseline justify-between">
         <h3 className="text-[15px] font-medium">Record a transaction</h3>
-        <span className="micro">{mode === "cash" ? "added now" : "fills at close"}</span>
+        <span className="micro">{mode === "cash" ? "added now" : "fills at next close"}</span>
       </div>
 
       <div className="mb-4 flex items-center gap-1 rounded-sm bg-paper p-1 text-xs">
@@ -167,7 +183,8 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
           <span className="text-muted">
             {price ? (
               <>
-                {ticker} at <span className="num text-ink">{money(price, 2)}</span>
+                {ticker} last closed at <span className="num text-ink">{money(price, 2)}</span>
+                <span className="ml-1">({humanDate(lastClose)})</span>
               </>
             ) : (
               "No price for this ticker"
@@ -176,7 +193,7 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
           <span className="text-muted">
             {estimate ? (
               <>
-                ≈ <span className="num text-ink">{estimate.toFixed(4)}</span> units
+                ≈ <span className="num text-ink">{estimate.toFixed(4)}</span> units, est.
               </>
             ) : (
               "—"
@@ -186,8 +203,10 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
       )}
 
       <div className="mt-1 flex items-baseline justify-between text-xs">
-        <span className="text-muted">Cash in this portfolio</span>
-        <span className="num text-ink">{money(state.cash, 2)}</span>
+        <span className="text-muted">
+          {state.pending.length ? "Cash free (after pending orders)" : "Cash in this portfolio"}
+        </span>
+        <span className="num text-ink">{money(cash, 2)}</span>
       </div>
 
       <label className="mt-3 block">
@@ -211,7 +230,7 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
           <p role="alert">
             {error ??
               (cashShort
-                ? `Not enough cash: this needs ${money(numeric)}, you hold ${money(state.cash)}.`
+                ? `Not enough cash: this needs ${money(numeric)}, you have ${money(cash)} free.`
                 : `You only hold ${held.toFixed(2)} units of ${ticker}.`)}
           </p>
           {(cashShort || noCash) && (
@@ -254,7 +273,7 @@ export default function TradeTicket({ state, fillDate, priceFor, tickers, onTrad
         <Info size={12} className="mt-0.5 shrink-0" />
         {mode === "cash"
           ? "Cash added here is new money into this portfolio, and counts as money put in — it will not inflate your return."
-          : "Trades fill at that day's closing price. No fees, slippage or tax — this is a record of decisions, not an execution venue."}
+          : "Orders fill at the next market close after you place them, so the price is one you could not have known. No fees, slippage or tax — this is a record of decisions, not an execution venue."}
       </p>
     </form>
   );

@@ -4,7 +4,7 @@ let bundlePromise: Promise<PriceBundle> | null = null;
 
 export function loadPrices(): Promise<PriceBundle> {
   if (!bundlePromise) {
-    bundlePromise = fetch("/data/prices.json")
+    bundlePromise = fetch(`${import.meta.env.BASE_URL}data/prices.json`)
       .then((r) => {
         if (!r.ok) throw new Error(`Price data failed to load (${r.status})`);
         return r.json() as Promise<PriceBundle>;
