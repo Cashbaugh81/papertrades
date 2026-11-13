@@ -98,13 +98,22 @@ function nyDate(t = Date.now()) {
 function closesAfter(day, placedAt) {
   return closeInstant(day) > Date.parse(placedAt);
 }
-var PUBLISH_DELAY_MS = 90 * 6e4;
+var PUBLISH_DELAY_MS = 60 * 6e4;
+function isWeekday(day) {
+  const dow = (/* @__PURE__ */ new Date(`${day}T12:00:00Z`)).getUTCDay();
+  return dow >= 1 && dow <= 5;
+}
 function lastCutoff(now = Date.now()) {
-  const today = nyDate(now);
-  const t = closeInstant(today) + PUBLISH_DELAY_MS;
-  if (t <= now) return t;
-  const yesterday = nyDate(Date.parse(`${today}T12:00:00Z`) - 864e5);
-  return closeInstant(yesterday) + PUBLISH_DELAY_MS;
+  let day = nyDate(now);
+  for (let i = 0; i < 7; i++) {
+    const t = closeInstant(day) + PUBLISH_DELAY_MS;
+    if (isWeekday(day) && t <= now) return t;
+    day = nyDate(Date.parse(`${day}T12:00:00Z`) - 864e5);
+  }
+  return closeInstant(day) + PUBLISH_DELAY_MS;
+}
+function nyHour(now = Date.now()) {
+  return Number(hourFmt.format(now));
 }
 
 // src/lib/rows.ts
@@ -521,12 +530,16 @@ function needsFullRefetch(stored, fresh) {
   }
   return stored.size > 0 && overlap === 0;
 }
+var RETRY_AFTER_MS = 45 * 6e4;
+var RETRY_FOR_MS = 4 * 36e5;
 function isFresh(row, now, lastCutoff2) {
   if (!row?.fetched_at) return false;
   const fetched = Date.parse(row.fetched_at);
   if (row.status === "not_found") return now - fetched < 864e5;
   if (row.status === "error") return now - fetched < 36e5;
-  return fetched >= lastCutoff2;
+  if (fetched < lastCutoff2) return false;
+  if (row.last_date && row.last_date >= nyDate(lastCutoff2)) return true;
+  return now - fetched < RETRY_AFTER_MS || fetched - lastCutoff2 > RETRY_FOR_MS;
 }
 export {
   CALENDAR_TICKER,
@@ -538,6 +551,7 @@ export {
   needsFullRefetch,
   normaliseTicker,
   nyDate,
+  nyHour,
   parseBars,
   rowToPortfolio,
   seriesToBundle,

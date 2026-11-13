@@ -1,6 +1,13 @@
 // POST /functions/v1/nightly-close   (called by pg_cron; header x-cron-secret)
 //
-// 1. Refresh the closes of every ticker any portfolio uses.
+// Runs every hour from 17:00 to 05:00 New York time, the first an hour after
+// the close. Each run:
+// 1. Refreshes the closes of tickers in use that don't have the latest close
+//    yet, oldest first, using at most RUN_BUDGET Tiingo requests so people
+//    adding stocks still have room in the free plan's 50 an hour. SPY goes
+//    first: if Tiingo doesn't have its close yet (late, or a holiday), the
+//    run stops there and the next hour tries again. Later runs pick up
+//    whatever earlier ones didn't reach.
 // 2. For each portfolio with pending orders, run the app's own engine and
 //    record the orders that have reached their close as filled or rejected.
 //
@@ -11,12 +18,24 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   buildIndex,
   CALENDAR_TICKER,
+  lastCutoff,
+  nyDate,
+  nyHour,
   rowToPortfolio,
   seriesToBundle,
   settle,
   tickersFor,
 } from "../_shared/engine.js";
-import { refreshTicker } from "../_shared/refresh.ts";
+import { type CallCounter, MAX_CALLS_PER_TICKER, refreshTicker } from "../_shared/refresh.ts";
+
+/** Tiingo requests one run may use; the free plan allows 50 an hour. */
+const RUN_BUDGET = 40;
+
+/** True from 17:00 to 05:59 New York time, when the hourly runs do their work. */
+function inWindow(now: number): boolean {
+  const h = nyHour(now);
+  return h >= 17 || h <= 5;
+}
 
 /** Days of price history loaded before a portfolio's start, for close fallbacks. */
 const LOOKBACK_DAYS = 10;
@@ -38,8 +57,14 @@ Deno.serve(async (req) => {
   if (!token) return new Response("server is missing TIINGO_API_KEY", { status: 500 });
 
   const started = Date.now();
+  const now = Date.now();
+  const counter: CallCounter = { calls: 0 };
   const report = {
+    closeOf: nyDate(lastCutoff(now)),
+    skipped: null as string | null,
+    tiingoCalls: 0,
     refreshed: {} as Record<string, string>,
+    notReached: 0,
     portfolios: 0,
     filled: 0,
     rejected: 0,
@@ -61,14 +86,42 @@ Deno.serve(async (req) => {
       for (const t of Object.keys((r.weights as object) ?? {})) inUse.add(t);
     }
 
-    for (const t of [...inUse].sort()) {
-      try {
-        const info = await refreshTicker(db, t, token);
-        report.refreshed[t] = info.error ? `${info.status} (${info.error})` : `${info.status} → ${info.last_date}`;
-      } catch (e) {
-        report.errors.push(`refresh ${t}: ${e instanceof Error ? e.message : e}`);
+    // Oldest first, so tickers a busy evening didn't reach go first next hour.
+    const { data: metaRows, error: e2 } = await db.from("tickers").select("ticker, fetched_at").in("ticker", [...inUse]);
+    if (e2) throw e2;
+    const fetchedAt = new Map((metaRows ?? []).map((r) => [r.ticker as string, (r.fetched_at as string | null) ?? ""]));
+    const others = [...inUse]
+      .filter((t) => t !== CALENDAR_TICKER)
+      .sort((a, b) => (fetchedAt.get(a) ?? "").localeCompare(fetchedAt.get(b) ?? "") || a.localeCompare(b));
+
+    if (!inWindow(now)) {
+      report.skipped = "outside 17:00–05:59 New York";
+    } else {
+      const refresh = async (t: string) => {
+        try {
+          const info = await refreshTicker(db, t, token, { now, counter });
+          report.refreshed[t] = info.error ? `${info.status} (${info.error})` : `${info.status} → ${info.last_date}`;
+          return info;
+        } catch (e) {
+          report.errors.push(`refresh ${t}: ${e instanceof Error ? e.message : e}`);
+          return null;
+        }
+      };
+
+      const spy = await refresh(CALENDAR_TICKER);
+      if (!spy || spy.status !== "ok" || (spy.last_date ?? "") < report.closeOf) {
+        report.skipped = `Tiingo doesn't have the ${report.closeOf} close yet`;
+      } else {
+        for (const [i, t] of others.entries()) {
+          if (counter.calls + MAX_CALLS_PER_TICKER > RUN_BUDGET) {
+            report.notReached = others.length - i;
+            break;
+          }
+          await refresh(t);
+        }
       }
     }
+    report.tiingoCalls = counter.calls;
 
     // ---- 2. settle pending orders -------------------------------------------
     const { data: pending, error: e3 } = await db

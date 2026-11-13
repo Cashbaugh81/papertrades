@@ -45,18 +45,36 @@ export function closesAfter(day: string, placedAt: string): boolean {
   return closeInstant(day) > Date.parse(placedAt);
 }
 
-/** Tiingo publishes end-of-day closes about 90 minutes after the bell. */
-const PUBLISH_DELAY_MS = 90 * 60_000;
+/**
+ * The day's closes are first looked for an hour after the bell (17:00 New
+ * York). Tiingo usually has them by then; when it doesn't, the evening runs
+ * keep retrying (see isFresh and nightly-close).
+ */
+const PUBLISH_DELAY_MS = 60 * 60_000;
+
+/** True for Monday to Friday. Holidays aren't known here. */
+export function isWeekday(day: string): boolean {
+  const dow = new Date(`${day}T12:00:00Z`).getUTCDay();
+  return dow >= 1 && dow <= 5;
+}
 
 /**
- * The most recent 17:30 New York time at or before `now`: after this, the
- * day's close should be available from Tiingo. Weekends and holidays just
- * give a cutoff with no new data behind it, which costs one wasted fetch.
+ * The most recent 17:00 New York on a weekday, at or before `now`: after
+ * this, that day's close should be available from Tiingo. Weekends are
+ * skipped; a holiday gives a cutoff with no new data behind it, which the
+ * evening runs notice cheaply (see nightly-close).
  */
 export function lastCutoff(now: number = Date.now()): number {
-  const today = nyDate(now);
-  const t = closeInstant(today) + PUBLISH_DELAY_MS;
-  if (t <= now) return t;
-  const yesterday = nyDate(Date.parse(`${today}T12:00:00Z`) - 86_400_000);
-  return closeInstant(yesterday) + PUBLISH_DELAY_MS;
+  let day = nyDate(now);
+  for (let i = 0; i < 7; i++) {
+    const t = closeInstant(day) + PUBLISH_DELAY_MS;
+    if (isWeekday(day) && t <= now) return t;
+    day = nyDate(Date.parse(`${day}T12:00:00Z`) - 86_400_000);
+  }
+  return closeInstant(day) + PUBLISH_DELAY_MS; // unreachable
+}
+
+/** The hour (0–23) in New York at `now`. */
+export function nyHour(now: number = Date.now()): number {
+  return Number(hourFmt.format(now));
 }
