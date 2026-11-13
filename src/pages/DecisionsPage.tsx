@@ -27,6 +27,7 @@ export default function DecisionsPage({ portfolios, states }: Props) {
         portfolioName: state?.name ?? p.name,
         fill: state?.fills[t.id],
         pending: !!state?.pending.some((o) => o.txId === t.id),
+        rejection: state?.rejections[t.id],
       }));
     })
     .sort((a, b) => (a.tx.date < b.tx.date ? 1 : a.tx.date > b.tx.date ? -1 : 0));
@@ -64,7 +65,7 @@ export default function DecisionsPage({ portfolios, states }: Props) {
                 </td>
               </tr>
             )}
-            {rows.map(({ tx, portfolioId, portfolioName, fill, pending }) => (
+            {rows.map(({ tx, portfolioId, portfolioName, fill, pending, rejection }) => (
               <tr key={tx.id} className="border-b border-rule/70">
                 <td className="whitespace-nowrap py-2.5 pr-3 text-muted">{humanDate(tx.date)}</td>
                 <td className="px-3 py-2.5">
@@ -81,7 +82,11 @@ export default function DecisionsPage({ portfolios, states }: Props) {
                       tx.kind === "buy" ? "text-gain" : tx.kind === "sell" ? "text-loss" : "text-muted"
                     }
                   >
-                    {pending
+                    {rejection
+                      ? tx.kind === "buy"
+                        ? "Rejected buy"
+                        : "Rejected sell"
+                      : pending
                       ? tx.kind === "buy"
                         ? "Buy order"
                         : "Sell order"
@@ -99,6 +104,10 @@ export default function DecisionsPage({ portfolios, states }: Props) {
                     <span title={`Filled at the ${humanDate(fill.date)} close`}>{money(fill.price, 2)}</span>
                   ) : pending ? (
                     <span className="text-[11px] uppercase tracking-wide">pending</span>
+                  ) : rejection ? (
+                    <span className="text-[11px] uppercase tracking-wide text-loss" title={rejection.reason}>
+                      rejected
+                    </span>
                   ) : (
                     "—"
                   )}

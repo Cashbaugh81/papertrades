@@ -9,10 +9,13 @@ type Props = {
   asOf: string;
   onSignOut: () => void;
   children: ReactNode;
+  /** Prices are older than the last published close (Tiingo late, or offline). */
   stale?: boolean;
+  /** A one-off message, such as a failed save. */
+  notice?: { text: string; onDismiss: () => void } | null;
 };
 
-export default function Shell({ account, asOf, onSignOut, children, stale }: Props) {
+export default function Shell({ account, asOf, onSignOut, children, stale, notice }: Props) {
   const { pathname } = useLocation();
 
   return (
@@ -58,10 +61,20 @@ export default function Shell({ account, asOf, onSignOut, children, stale }: Pro
           <div className="mx-auto flex max-w-[1080px] items-start gap-2 px-6 py-2 text-[12px] leading-snug text-flag">
             <span className="mt-1 size-1.5 shrink-0 rounded-full bg-flag" />
             <span>
-              Prices are a fixed snapshot, not a live feed. This build ships daily closes
-              through {humanDate(asOf)} and nothing refreshes on its own yet. Orders placed now
-              stay pending until a later close is added.
+              The newest close we have is {humanDate(asOf)}, which is older than expected. The
+              price source may be running late; pending orders fill once the close arrives.
             </span>
+          </div>
+        </div>
+      )}
+
+      {notice && (
+        <div className="border-b border-loss/25 bg-loss/5">
+          <div className="mx-auto flex max-w-[1080px] items-start justify-between gap-3 px-6 py-2 text-[12px] leading-snug text-loss">
+            <span role="alert">{notice.text}</span>
+            <button onClick={notice.onDismiss} className="shrink-0 underline underline-offset-2">
+              dismiss
+            </button>
           </div>
         </div>
       )}
@@ -71,7 +84,7 @@ export default function Shell({ account, asOf, onSignOut, children, stale }: Pro
       <footer className="border-t border-rule">
         <div className="mx-auto max-w-[1080px] px-6 py-6 text-[11px] leading-relaxed text-muted">
           Paper portfolios only. No brokerage connection, no real orders, no real money.
-          Accounts and trades are stored in this browser alone — not synced, not backed up.
+          Prices are daily adjusted closes from Tiingo; orders fill at the next close.
         </div>
       </footer>
     </div>

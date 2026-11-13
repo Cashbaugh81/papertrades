@@ -1,21 +1,5 @@
 import type { PriceBundle, PriceSeries } from "@/lib/types";
 
-let bundlePromise: Promise<PriceBundle> | null = null;
-
-export function loadPrices(): Promise<PriceBundle> {
-  if (!bundlePromise) {
-    bundlePromise = fetch(`${import.meta.env.BASE_URL}data/prices.json`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`Price data failed to load (${r.status})`);
-        return r.json() as Promise<PriceBundle>;
-      })
-      .catch((err) => {
-        bundlePromise = null;
-        throw err;
-      });
-  }
-  return bundlePromise;
-}
 
 /** ticker -> date -> close, with the trading calendar derived once. */
 export type PriceIndex = {

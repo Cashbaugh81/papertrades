@@ -2,7 +2,7 @@
 
 A personal paper-trading tool. Start with one amount of cash and one monthly contribution, run several portfolios side by side on exactly the same dollars, and watch how far apart they end up. Return is always shown next to drawdown, volatility and the time window it was measured over.
 
-This first commit is the code and research as they were brought over from an earlier platform, with no changes yet. See [docs/BUILD-RECORD.md](docs/BUILD-RECORD.md) for the research and how the first version was built.
+Accounts and portfolios are stored in Supabase, so they sync across devices. Prices are daily adjusted closes from Tiingo, fetched and cached on the server. See [docs/BUILD-RECORD.md](docs/BUILD-RECORD.md) for the original research and how the first version was built.
 
 ## Run locally
 
@@ -12,14 +12,14 @@ npm run dev        # development server
 npm run build      # production build
 ```
 
-Prices are read from `public/data/prices.json`: daily adjusted closes for 59 tickers, starting 2019-01-02, from Yahoo via yfinance.
+The app talks to the live Supabase project by default. To point it at another project, set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. `test/fixtures/prices.json` (59 tickers from 2019, from the original build) is used only by the tests.
 
 ## Known issues (from the November 2026 review)
 
 1. ~~**Trades can use hindsight.**~~ Fixed: an order records when it was placed and fills at the first market close after that moment. Until that close is in the data it shows as pending and its cash is held.
 2. ~~**Volatility and drawdown include contributions.**~~ Fixed: both are measured on time-weighted returns. VTI/BND from 2023 now shows 10.4% volatility and a −12.7% max drawdown.
 3. **Only one time window is shown, and the data starts in 2019.** The research's own rule says to show at least two windows side by side, including 2000–2008.
-4. **Data is stored in the browser only.** Nothing syncs between devices.
+4. ~~**Data is stored in the browser only.**~~ Fixed: accounts, portfolios and orders are stored in Supabase.
 5. **Target weights never rebalance.** They only apply to new contributions, so concentrated portfolios drift over time.
 
 ## Server (Supabase)
@@ -35,6 +35,8 @@ Prices are read from `public/data/prices.json`: daily adjusted closes for 59 tic
 npm test           # vitest: fills, pending orders, market clock, time-weighted metrics,
                    # settlement, Tiingo parsing and refresh rules
 ```
+
+`checks/e2e.check.ts` drives the built app in headless Chrome against the live project. It needs a confirmed throwaway account with no portfolios; see the comment at the top of the file.
 
 ## Layout
 

@@ -246,7 +246,7 @@ describe("review regression on bundled data", () => {
   // From the 12 Nov 2026 review: VTI/BND from 2023 showed 13.3% vol and a
   // -9.5% max drawdown; the flow-adjusted figures are 10.4% and -12.7%.
   it("VTI/BND from 2023 matches the time-weighted figures", () => {
-    const bundle = JSON.parse(readFileSync("public/data/prices.json", "utf8")) as PriceBundle;
+    const bundle = JSON.parse(readFileSync("test/fixtures/prices.json", "utf8")) as PriceBundle;
     const real = buildIndex(bundle);
     const start = real.calendar.find((x) => x >= "2023-01-01")!;
     const s = computeState(

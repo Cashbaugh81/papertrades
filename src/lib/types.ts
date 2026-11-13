@@ -13,9 +13,6 @@ export type Account = {
   id: string;
   email: string;
   name: string;
-  /** Not a real password hash: this build has no server. See README note in UI. */
-  secret: string;
-  createdAt: string;
 };
 
 export type TxKind = "deposit" | "buy" | "sell";
@@ -75,10 +72,6 @@ export type Portfolio = {
   example?: boolean;
 };
 
-export type AccountData = {
-  account: Account;
-  portfolios: Portfolio[];
-};
 
 export type Holding = {
   ticker: string;

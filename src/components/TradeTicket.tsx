@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, Info, Plus } from "lucide-react";
-import type { PortfolioState, Tx } from "@/lib/types";
+import type { PortfolioState } from "@/lib/types";
+import type { OrderInput, TickerInfo } from "@/lib/api";
 import { humanDate, money } from "@/lib/ledger";
-import { nextId } from "@/lib/store";
-import { nyDate } from "@/lib/market";
+
+const TICKER_RE = /^[A-Z0-9][A-Z0-9.-]{0,11}$/;
 
 type Mode = "buy" | "sell" | "cash";
 
@@ -15,18 +16,47 @@ type Props = {
    */
   lastClose: string;
   priceFor: (ticker: string) => number | undefined;
+  /** Tickers already loaded, offered as suggestions. Any other ticker can be typed. */
   tickers: string[];
-  onTrade: (tx: Tx) => void;
+  /** Load a ticker's prices that isn't loaded yet. */
+  lookup: (ticker: string) => Promise<TickerInfo | undefined>;
+  onTrade: (order: OrderInput) => Promise<void>;
 };
 
-export default function TradeTicket({ state, lastClose, priceFor, tickers, onTrade }: Props) {
+type Lookup = { ticker: string; state: "loading" | "not_found" | "error"; message?: string };
+
+export default function TradeTicket({ state, lastClose, priceFor, tickers, lookup, onTrade }: Props) {
   const [mode, setMode] = useState<Mode>("buy");
   const [ticker, setTicker] = useState(state.holdings[0]?.ticker ?? tickers[0] ?? "");
   const [amount, setAmount] = useState("500");
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [looked, setLooked] = useState<Lookup | null>(null);
 
   const price = priceFor(ticker);
+
+  // A ticker we don't have prices for yet: look it up after a pause in typing.
+  useEffect(() => {
+    if (mode !== "buy" || !TICKER_RE.test(ticker) || price !== undefined) return;
+    if (looked?.ticker === ticker) return;
+    const t = window.setTimeout(() => {
+      setLooked({ ticker, state: "loading" });
+      lookup(ticker)
+        .then((info) => {
+          if (!info || info.status === "ok") setLooked(null);
+          else
+            setLooked({
+              ticker,
+              state: info.status === "not_found" ? "not_found" : "error",
+              message: info.error ?? undefined,
+            });
+        })
+        .catch((e) => setLooked({ ticker, state: "error", message: e instanceof Error ? e.message : String(e) }));
+    }, 500);
+    return () => window.clearTimeout(t);
+  }, [mode, ticker, price, looked, lookup]);
+
   const numeric = Number(amount);
   const held = state.holdings.find((h) => h.ticker === ticker)?.units ?? 0;
 
@@ -47,9 +77,22 @@ export default function TradeTicket({ state, lastClose, priceFor, tickers, onTra
     mode === "sell" && price !== undefined && (numeric + pendingSells) / price > held * 1.0001 + 1e-9;
   const needsPrice = mode !== "cash";
   const invalid =
-    !(numeric > 0) || (needsPrice && !price) || cashShort || unitsShort;
+    busy || !(numeric > 0) || (needsPrice && !price) || cashShort || unitsShort;
 
   const noCash = cash < 1 && mode === "buy";
+
+  async function send(order: OrderInput) {
+    setBusy(true);
+    try {
+      await onTrade(order);
+      setNote("");
+      setAmount("500");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "That didn't save. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -60,20 +103,8 @@ export default function TradeTicket({ state, lastClose, priceFor, tickers, onTra
       return;
     }
 
-    const placedAt = new Date().toISOString();
-    const date = nyDate(Date.parse(placedAt));
-
     if (mode === "cash") {
-      onTrade({
-        id: nextId("tx"),
-        kind: "deposit",
-        date,
-        placedAt,
-        amount: numeric,
-        note: note.trim() || undefined,
-      });
-      setNote("");
-      setAmount("500");
+      void send({ kind: "deposit", amount: numeric, note: note.trim() || undefined });
       return;
     }
 
@@ -93,22 +124,14 @@ export default function TradeTicket({ state, lastClose, priceFor, tickers, onTra
       return;
     }
 
-    // No price is stored: the order fills at the first close after `placedAt`.
-    onTrade({
-      id: nextId("tx"),
-      kind: mode,
-      date,
-      placedAt,
-      ticker,
-      amount: numeric,
-      note: note.trim() || undefined,
-    });
-    setNote("");
-    setAmount("500");
+    // No price or time is sent: the server stamps the time, and the order
+    // fills at the first close after it.
+    void send({ kind: mode, ticker, amount: numeric, note: note.trim() || undefined });
   }
 
-  const submitLabel =
-    mode === "cash"
+  const submitLabel = busy
+    ? "Saving…"
+    : mode === "cash"
       ? `Add ${money(numeric || 0)} of cash`
       : `Place order: ${mode === "buy" ? "buy" : "sell"} ${ticker || "—"} at the next close`;
 
@@ -129,7 +152,30 @@ export default function TradeTicket({ state, lastClose, priceFor, tickers, onTra
       </div>
 
       <div className={`grid gap-3 ${mode === "cash" ? "" : "sm:grid-cols-2"}`}>
-        {mode !== "cash" && (
+        {mode === "buy" && (
+          <label className="block">
+            <span className="micro">Ticker</span>
+            <input
+              value={ticker}
+              list="ticker-suggestions"
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="e.g. VTI"
+              onChange={(e) => {
+                setTicker(e.target.value.trim().toUpperCase());
+                setError(null);
+              }}
+              className="mt-1 w-full rounded-sm border border-rule bg-surface px-2.5 py-2 text-sm uppercase"
+            />
+            <datalist id="ticker-suggestions">
+              {tickers.map((t) => (
+                <option key={t} value={t} />
+              ))}
+            </datalist>
+          </label>
+        )}
+        {mode === "sell" && (
           <label className="block">
             <span className="micro">Ticker</span>
             <select
@@ -186,8 +232,18 @@ export default function TradeTicket({ state, lastClose, priceFor, tickers, onTra
                 {ticker} last closed at <span className="num text-ink">{money(price, 2)}</span>
                 <span className="ml-1">({humanDate(lastClose)})</span>
               </>
+            ) : !ticker ? (
+              "Type a ticker"
+            ) : looked?.ticker === ticker && looked.state === "loading" ? (
+              `Looking up ${ticker}…`
+            ) : looked?.ticker === ticker && looked.state === "not_found" ? (
+              `No ticker called ${ticker}`
+            ) : looked?.ticker === ticker && looked.state === "error" ? (
+              `Couldn't load ${ticker} right now`
+            ) : TICKER_RE.test(ticker) ? (
+              `Looking up ${ticker}…`
             ) : (
-              "No price for this ticker"
+              "That isn't a ticker"
             )}
           </span>
           <span className="text-muted">

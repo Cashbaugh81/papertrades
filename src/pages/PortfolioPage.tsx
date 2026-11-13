@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft, AlertTriangle } from "lucide-react";
-import type { Portfolio, PortfolioState, Tx } from "@/lib/types";
+import type { Portfolio, PortfolioState } from "@/lib/types";
+import type { OrderInput, TickerInfo } from "@/lib/api";
 import type { PriceIndex } from "@/lib/prices";
 import PathChart from "@/components/PathChart";
 import TradeTicket from "@/components/TradeTicket";
@@ -12,9 +13,11 @@ type Props = {
   index: PriceIndex;
   states: PortfolioState[];
   baseline?: PortfolioState;
-  onTrade: (tx: Tx) => void;
+  onTrade: (order: OrderInput) => Promise<void>;
+  /** Cancel a pending order, or remove a row from an example portfolio. */
   onDeleteTx: (txId: string) => void;
   priceFor: (ticker: string) => number | undefined;
+  lookup: (ticker: string) => Promise<TickerInfo | undefined>;
 };
 
 export default function PortfolioPage({
@@ -26,6 +29,7 @@ export default function PortfolioPage({
   onTrade,
   onDeleteTx,
   priceFor,
+  lookup,
 }: Props) {
   const spread = baseline ? state.returnOnInvested - baseline.returnOnInvested : 0;
   const days = historyDays(state.dates);
@@ -211,6 +215,11 @@ export default function PortfolioPage({
                   const fill = state.fills[t.id];
                   const px = fill?.price;
                   const isPending = state.pending.some((o) => o.txId === t.id);
+                  const rejection = state.rejections[t.id];
+                  // The record is permanent once an order has filled or been
+                  // rejected. Pending orders can be cancelled; example rows are
+                  // not your decisions, so they can go.
+                  const removable = isPending || !!portfolio.example;
                   return (
                     <tr key={t.id} className="group border-b border-rule/70">
                       <td className="whitespace-nowrap py-2.5 pr-3 text-muted">{humanDate(t.date)}</td>
@@ -224,7 +233,11 @@ export default function PortfolioPage({
                                 : "text-muted"
                           }
                         >
-                          {isPending
+                          {rejection
+                            ? t.kind === "buy"
+                              ? "Rejected buy"
+                              : "Rejected sell"
+                            : isPending
                             ? t.kind === "buy"
                               ? "Buy order"
                               : "Sell order"
@@ -238,19 +251,33 @@ export default function PortfolioPage({
                       </td>
                       <td className="num px-3 py-2.5">{t.amount ? money(t.amount, 2) : "—"}</td>
                       <td className="num px-3 py-2.5 text-muted">
-                        {px ? money(px, 2) : isPending ? <span className="text-[11px] uppercase tracking-wide">pending</span> : "—"}
+                        {px ? (
+                          money(px, 2)
+                        ) : isPending ? (
+                          <span className="text-[11px] uppercase tracking-wide">pending</span>
+                        ) : rejection ? (
+                          <span className="text-[11px] uppercase tracking-wide text-loss" title={rejection.reason}>
+                            rejected
+                          </span>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       <td className="max-w-52 px-3 py-2.5 text-muted">
                         {t.note ? <span className="line-clamp-2">{t.note}</span> : <span className="text-rule">—</span>}
                       </td>
                       <td className="pl-2 text-right">
-                        <button
-                          onClick={() => onDeleteTx(t.id)}
-                          className="text-[11px] text-muted opacity-0 transition-opacity duration-150 hover:text-loss group-hover:opacity-100 focus-visible:opacity-100"
-                          aria-label={`Remove trade from ${humanDate(t.date)}`}
-                        >
-                          remove
-                        </button>
+                        {removable && (
+                          <button
+                            onClick={() => onDeleteTx(t.id)}
+                            className={`text-[11px] text-muted transition-opacity duration-150 hover:text-loss focus-visible:opacity-100 ${
+                              isPending ? "" : "opacity-0 group-hover:opacity-100"
+                            }`}
+                            aria-label={`${isPending ? "Cancel order" : "Remove example trade"} from ${humanDate(t.date)}`}
+                          >
+                            {isPending ? "cancel" : "remove"}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -267,6 +294,7 @@ export default function PortfolioPage({
             lastClose={index.lastDate}
             priceFor={priceFor}
             tickers={index.tickers}
+            lookup={lookup}
             onTrade={onTrade}
           />
           <div className="mt-4 space-y-1.5 rounded-sm border border-rule px-3.5 py-3 text-[11px] leading-relaxed text-muted">
