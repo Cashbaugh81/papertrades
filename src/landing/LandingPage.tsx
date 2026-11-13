@@ -108,7 +108,7 @@ export default function LandingPage() {
               srcSet={`${BASE}landing/banner-1280.webp 1280w, ${BASE}landing/banner-2172.webp 2172w`}
               sizes="100vw"
               width={2172}
-              height={724}
+              height={682}
               alt=""
               className="block h-auto w-full"
             />
