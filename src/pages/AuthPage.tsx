@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useState } from "react";
 import { Lock } from "lucide-react";
 import { sendPasswordReset, setNewPassword, signIn, signUp } from "@/lib/api";
@@ -62,7 +63,7 @@ export default function AuthPage({ initialMode = "in", onResetDone }: Props) {
   return (
     <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
       <div className="hidden flex-col justify-between border-r border-rule bg-paper px-12 py-10 lg:flex">
-        <div className="figure text-[19px] font-semibold">Ledger</div>
+        <Link to="/" className="figure text-[19px] font-semibold text-ink no-underline">Ledger</Link>
         <div className="max-w-md">
           <h1 className="figure text-[42px] leading-[1.1] tracking-tight">
             The same dollars,
@@ -83,7 +84,7 @@ export default function AuthPage({ initialMode = "in", onResetDone }: Props) {
 
       <div className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm">
-          <div className="figure mb-6 text-[19px] font-semibold lg:hidden">Ledger</div>
+          <Link to="/" className="figure mb-6 block text-[19px] font-semibold text-ink no-underline lg:hidden">Ledger</Link>
           <h2 className="figure text-[26px] tracking-tight">{title}</h2>
           <p className="mt-1 text-[13px] text-muted">{subtitle}</p>
 

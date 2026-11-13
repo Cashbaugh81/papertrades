@@ -41,8 +41,8 @@ async function waitForNoText(page: Page, re: RegExp, timeout = 20_000) {
 }
 
 async function signIn(page: Page) {
-  await page.goto(BASE);
-  await waitForText(page, /Sign in/);
+  await page.goto(`${BASE}signin`);
+  await page.waitForSelector('input[type="password"]', { timeout: 30_000 });
   await page.fill('input[type="email"]', EMAIL);
   await page.fill('input[type="password"]', PASSWORD);
   await page.click('button[type="submit"]');
@@ -63,9 +63,34 @@ async function main() {
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   page.on("response", (r) => r.status() >= 400 && badResponses.push(`${r.status()} ${r.url().split("?")[0]}`));
 
-  // ---- sign in ---------------------------------------------------------------
+  // ---- landing page -----------------------------------------------------------
   await page.goto(BASE);
-  check("auth page shows", await waitForText(page, /Sign in/));
+  check("landing page shows", await waitForText(page, /Would you have held on\?/));
+  check("it opens on the summer scare", await waitForText(page, /The summer scare/, 5_000));
+  check("three portfolios with photos", (await page.locator('[data-testid="landing-col"] img').count()) === 3);
+  await page.waitForFunction(() => [...document.images].filter((i) => i.src.includes("/landing/")).every((i) => i.complete && i.naturalWidth > 0), null, { timeout: 15_000 }).catch(() => {});
+  check("photos load", await page.evaluate(() => [...document.images].filter((i) => i.src.includes("/landing/")).every((i) => i.naturalWidth > 0)));
+  await page.screenshot({ path: `${OUT}/0-landing-1280.png`, fullPage: true });
+  await page.click('button:has-text("Oct 2022")');
+  check("picking a moment changes the story", await waitForText(page, /The long slide/, 5_000));
+  check("the chip mix shows its worth then", /\$30,814/.test(await page.locator('[data-testid="landing-worth"]').nth(1).innerText()));
+  await page.click('button[aria-label="Later moment"]');
+  check("the arrow steps forward", await waitForText(page, /The summer scare/, 5_000));
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.waitForTimeout(300);
+  const landOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  check("landing has no sideways scroll at 320px", landOverflow <= 1, `${landOverflow}px`);
+  await page.screenshot({ path: `${OUT}/0-landing-320.png`, fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.locator('a:has-text("Start with pretend money")').first().click();
+  check("the call to action opens sign-up", await waitForText(page, /Create|Open ledger/, 10_000) && page.url().endsWith("/start"));
+  await page.locator('a:has-text("Ledger")').first().click();
+  check("the wordmark goes back to the landing page", await waitForText(page, /Would you have held on\?/, 10_000));
+  await page.click('nav a:has-text("Sign in")');
+
+  // ---- sign in ---------------------------------------------------------------
+  await page.waitForSelector('input[type="password"]', { timeout: 10_000 });
+  check("sign-in page shows", page.url().endsWith("/signin"));
   await page.fill('input[type="email"]', "nobody@test.invalid");
   await page.fill('input[type="password"]', "wrong-password-123");
   await page.click('button[type="submit"]');
@@ -179,7 +204,7 @@ async function main() {
   check("cancel returns to the comparison", await waitForText(page, /What-if: chosen with hindsight/, 10_000));
 
   await page.click('button[aria-label="Sign out"]');
-  check("sign out returns to the sign-in page", await waitForText(page, /Sign in/, 15_000));
+  check("sign out returns to the landing page", await waitForText(page, /Would you have held on\?/, 15_000));
 
   const unexpected = badResponses.filter((r) => !/^400 .*\/auth\/v1\/token$/.test(r));
   check("no failed requests except the deliberate bad sign-in", unexpected.length === 0, unexpected.join(" | ") || badResponses.join(" | "));
