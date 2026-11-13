@@ -4,7 +4,6 @@ import type { Portfolio, PortfolioState, Tx } from "@/lib/types";
 import type { PriceIndex } from "@/lib/prices";
 import PathChart from "@/components/PathChart";
 import TradeTicket from "@/components/TradeTicket";
-import { closeOn } from "@/lib/prices";
 import { historyDays, humanDate, money, pct, signedPct } from "@/lib/ledger";
 
 type Props = {
@@ -61,14 +60,18 @@ export default function PortfolioPage({
 
       <section className="grid grid-cols-2 gap-x-6 gap-y-5 border-y border-rule py-5 md:grid-cols-5">
         <Stat label="Put in" value={money(state.invested)} />
-        <Stat label="Cash left" value={money(state.cash, 2)} />
+        <Stat
+          label="Cash left"
+          value={money(state.availableCash, 2)}
+          hint={state.pending.length ? `${money(state.cash - state.availableCash)} held for orders` : undefined}
+        />
         <Stat
           label="Max drop"
           value={pct(state.maxDrawdown)}
           tone="loss"
-          hint="deepest fall along the path"
+          hint="deepest fall, deposits excluded"
         />
-        <Stat label="Volatility" value={pct(state.volatility)} hint="annualised, daily returns" />
+        <Stat label="Volatility" value={pct(state.volatility)} hint="annualised, deposits excluded" />
         <Stat
           label="vs baseline"
           value={baseline ? (baseline.id === state.id ? "—" : signedPct(spread)) : "—"}
@@ -87,6 +90,29 @@ export default function PortfolioPage({
             and are excluded from the value shown. {state.rejected.join("; ")}
           </div>
         </div>
+      )}
+
+      {state.pending.length > 0 && (
+        <section className="rounded-sm border border-rule bg-surface px-4 py-3 text-[13px]">
+          <div className="mb-1.5 flex items-baseline justify-between">
+            <h2 className="font-medium">Waiting to fill</h2>
+            <span className="micro">at the next close</span>
+          </div>
+          <ul className="space-y-1 text-muted">
+            {state.pending.map((o) => (
+              <li key={o.txId} className="flex justify-between gap-3">
+                <span>
+                  <span className={o.kind === "buy" ? "text-gain" : "text-loss"}>
+                    {o.kind === "buy" ? "Buy" : "Sell"}
+                  </span>{" "}
+                  <span className="font-medium text-ink">{o.ticker}</span>
+                  <span className="ml-2 text-[11px]">placed {placedLabel(o.placedAt)}</span>
+                </span>
+                <span className="num text-ink">{money(o.amount, 2)}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       <section>
@@ -182,7 +208,9 @@ export default function PortfolioPage({
                   </tr>
                 )}
                 {sortedTx.map((t) => {
-                  const px = t.price ?? (t.ticker ? closeOn(index, t.ticker, t.date) : undefined);
+                  const fill = state.fills[t.id];
+                  const px = fill?.price;
+                  const isPending = state.pending.some((o) => o.txId === t.id);
                   return (
                     <tr key={t.id} className="group border-b border-rule/70">
                       <td className="whitespace-nowrap py-2.5 pr-3 text-muted">{humanDate(t.date)}</td>
@@ -196,12 +224,22 @@ export default function PortfolioPage({
                                 : "text-muted"
                           }
                         >
-                          {t.kind === "buy" ? "Bought" : t.kind === "sell" ? "Sold" : "Deposited"}
+                          {isPending
+                            ? t.kind === "buy"
+                              ? "Buy order"
+                              : "Sell order"
+                            : t.kind === "buy"
+                              ? "Bought"
+                              : t.kind === "sell"
+                                ? "Sold"
+                                : "Deposited"}
                         </span>{" "}
                         <span className="font-medium">{t.ticker ?? ""}</span>
                       </td>
                       <td className="num px-3 py-2.5">{t.amount ? money(t.amount, 2) : "—"}</td>
-                      <td className="num px-3 py-2.5 text-muted">{px ? money(px, 2) : "—"}</td>
+                      <td className="num px-3 py-2.5 text-muted">
+                        {px ? money(px, 2) : isPending ? <span className="text-[11px] uppercase tracking-wide">pending</span> : "—"}
+                      </td>
                       <td className="max-w-52 px-3 py-2.5 text-muted">
                         {t.note ? <span className="line-clamp-2">{t.note}</span> : <span className="text-rule">—</span>}
                       </td>
@@ -226,7 +264,7 @@ export default function PortfolioPage({
         <aside className="lg:sticky lg:top-32 lg:self-start">
           <TradeTicket
             state={state}
-            fillDate={index.lastDate}
+            lastClose={index.lastDate}
             priceFor={priceFor}
             tickers={index.tickers}
             onTrade={onTrade}
@@ -253,6 +291,17 @@ export default function PortfolioPage({
       </div>
     </div>
   );
+}
+
+function placedLabel(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  return new Date(t).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function Stat({

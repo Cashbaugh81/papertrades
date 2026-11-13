@@ -194,7 +194,8 @@ export default function ComparisonPage({ states, portfolios, index, onStartFresh
         <p className="mt-4 max-w-3xl text-[12px] leading-relaxed text-muted">
           <strong className="font-medium text-ink">Max drop</strong> is the deepest peak-to-trough
           fall along the path — the number that decides whether you would actually have held on.{" "}
-          <strong className="font-medium text-ink">Vol</strong> is annualised daily volatility.
+          <strong className="font-medium text-ink">Vol</strong> is annualised daily volatility. Both
+          are measured with deposits stripped out, so a monthly top-up never hides a fall.
           Return alone ranks strategies; these two explain why the ranking is not the whole story.
         </p>
       </section>

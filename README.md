@@ -12,19 +12,26 @@ npm run dev        # development server
 npm run build      # production build
 ```
 
-Prices are read from `data/prices.json`: daily adjusted closes for 59 tickers, starting 2019-01-02, from Yahoo via yfinance.
+Prices are read from `public/data/prices.json`: daily adjusted closes for 59 tickers, starting 2019-01-02, from Yahoo via yfinance.
 
-## Known issues (from the November 2026 review), to fix next
+## Known issues (from the November 2026 review)
 
-1. **Trades can use hindsight.** Orders fill at the latest close in the bundled file, which may be days old. They should wait and fill at the next close after the order is placed, and past dates should not be allowed.
-2. **Volatility and drawdown include contributions.** Monthly deposits count as gains, which overstates volatility and understates drawdown. For example, VTI/BND from 2023 shows 13.3% volatility instead of 10.4%, and a −9.5% max drawdown instead of −12.7%. These should be calculated on flow-adjusted (time-weighted) returns.
+1. ~~**Trades can use hindsight.**~~ Fixed: an order records when it was placed and fills at the first market close after that moment. Until that close is in the data it shows as pending and its cash is held.
+2. ~~**Volatility and drawdown include contributions.**~~ Fixed: both are measured on time-weighted returns. VTI/BND from 2023 now shows 10.4% volatility and a −12.7% max drawdown.
 3. **Only one time window is shown, and the data starts in 2019.** The research's own rule says to show at least two windows side by side, including 2000–2008.
 4. **Data is stored in the browser only.** Nothing syncs between devices.
 5. **Target weights never rebalance.** They only apply to new contributions, so concentrated portfolios drift over time.
 
+## Tests
+
+```bash
+npm test           # vitest: fills, pending orders, market clock, time-weighted metrics
+```
+
 ## Layout
 
-- `src/lib/ledger.ts` — valuation engine: cash flows, fills, drawdown, volatility
+- `src/lib/ledger.ts` — valuation engine: cash flows, order fills, time-weighted drawdown and volatility
+- `src/lib/market.ts` — market clock (16:00 New York close, daylight saving aware)
 - `src/lib/prices.ts` — price index and close lookups
 - `src/lib/store.ts` — storage (browser localStorage for now)
 - `src/pages/`, `src/components/` — user interface
