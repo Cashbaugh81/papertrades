@@ -8,6 +8,8 @@
  * it overlaps still match what we stored. If they don't, refetch everything.
  */
 
+import { nyDate } from "@/lib/market";
+
 export const HISTORY_START = "2000-01-01";
 /** Days of overlap re-fetched on an incremental refresh, to detect re-adjustment. */
 export const OVERLAP_DAYS = 10;
@@ -63,14 +65,21 @@ export function needsFullRefetch(stored: Map<string, number>, fresh: TiingoBar[]
   return stored.size > 0 && overlap === 0;
 }
 
+/** How long to wait before asking Tiingo again for a close it didn't have yet. */
+export const RETRY_AFTER_MS = 45 * 60_000;
+/** How long after the cutoff to keep retrying a missing close (late data, holidays). */
+export const RETRY_FOR_MS = 4 * 3_600_000;
+
 /**
  * Whether a cached ticker is fresh enough to skip fetching.
  * - Unknown tickers ("not_found") are retried after a day; errors after an hour.
- * - A good ticker is fresh if it was fetched after the most recent 17:30 New
- *   York cutoff (Tiingo publishes end-of-day closes around then).
+ * - A good ticker is fresh once it has the close of the cutoff's day.
+ * - If it was checked after the cutoff but that close wasn't out yet, it's
+ *   retried every 45 minutes for the first 4 hours after the cutoff, then left
+ *   until the next cutoff (a holiday, or a ticker that has stopped trading).
  */
 export function isFresh(
-  row: { status: string; fetched_at: string | null } | undefined,
+  row: { status: string; fetched_at: string | null; last_date?: string | null } | undefined,
   now: number,
   lastCutoff: number,
 ): boolean {
@@ -78,5 +87,7 @@ export function isFresh(
   const fetched = Date.parse(row.fetched_at);
   if (row.status === "not_found") return now - fetched < 86_400_000;
   if (row.status === "error") return now - fetched < 3_600_000;
-  return fetched >= lastCutoff;
+  if (fetched < lastCutoff) return false;
+  if (row.last_date && row.last_date >= nyDate(lastCutoff)) return true;
+  return now - fetched < RETRY_AFTER_MS || fetched - lastCutoff > RETRY_FOR_MS;
 }

@@ -26,7 +26,14 @@ type Bar = { date: string; adjClose: number };
 
 class NotFound extends Error {}
 
-async function tiingo(path: string, token: string): Promise<unknown> {
+/** Counts Tiingo requests, so a caller can stay inside the hourly limit. */
+export type CallCounter = { calls: number };
+
+/** The most Tiingo requests one refreshTicker can make (metadata + incremental + full). */
+export const MAX_CALLS_PER_TICKER = 3;
+
+async function tiingo(path: string, token: string, counter?: CallCounter): Promise<unknown> {
+  if (counter) counter.calls++;
   const res = await fetch(`${TIINGO}/${path}`, {
     headers: { Authorization: `Token ${token}`, "Content-Type": "application/json" },
   });
@@ -38,10 +45,11 @@ async function tiingo(path: string, token: string): Promise<unknown> {
   return res.json();
 }
 
-async function fetchBars(ticker: string, start: string, token: string): Promise<Bar[]> {
+async function fetchBars(ticker: string, start: string, token: string, counter?: CallCounter): Promise<Bar[]> {
   const json = await tiingo(
     `${encodeURIComponent(ticker.toLowerCase())}/prices?startDate=${start}&resampleFreq=daily`,
     token,
+    counter,
   );
   return parseBars(json) as Bar[];
 }
@@ -79,9 +87,10 @@ export async function refreshTicker(
   db: SupabaseClient,
   ticker: string,
   token: string,
-  opts: { now?: number } = {},
+  opts: { now?: number; counter?: CallCounter } = {},
 ): Promise<TickerInfo> {
   const now = opts.now ?? Date.now();
+  const counter = opts.counter;
   const nowIso = new Date(now).toISOString();
   const { data: existing, error } = await db.from("tickers").select("*").eq("ticker", ticker).maybeSingle();
   if (error) throw error;
@@ -95,17 +104,17 @@ export async function refreshTicker(
     if (full && !name) {
       // One-off metadata call for a ticker we've never had: its name, and a
       // clean "not found" for typos.
-      const m = (await tiingo(encodeURIComponent(ticker.toLowerCase()), token)) as { name?: string };
+      const m = (await tiingo(encodeURIComponent(ticker.toLowerCase()), token, counter)) as { name?: string };
       name = typeof m?.name === "string" ? m.name.trim() || null : null;
     }
 
     let bars: Bar[] = [];
     if (!full) {
       const start = incrementalStart(meta!.last_date!);
-      bars = await fetchBars(ticker, start, token);
+      bars = await fetchBars(ticker, start, token, counter);
       if (needsFullRefetch(await storedSince(db, ticker, start), bars)) full = true;
     }
-    if (full) bars = await fetchBars(ticker, HISTORY_START, token);
+    if (full) bars = await fetchBars(ticker, HISTORY_START, token, counter);
 
     if (bars.length === 0) {
       if (meta?.status === "ok") {

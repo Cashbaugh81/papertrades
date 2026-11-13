@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeInstant, lastCutoff } from "@/lib/market";
+import { closeInstant, lastCutoff, nyHour } from "@/lib/market";
 import { buildIndex } from "@/lib/prices";
 import { rowToPortfolio, seriesToBundle, tickersFor, toWeights, type PortfolioRow, type TransactionRow } from "@/lib/rows";
 import { settle } from "@/server/settle";
@@ -182,16 +182,42 @@ describe("tiingo", () => {
 
   it("decides freshness by status and the publish cutoff", () => {
     const now = Date.parse("2026-11-13T20:00:00Z"); // 15:00 New York, Friday
-    const cutoff = lastCutoff(now); // Thursday 17:30 New York
-    expect(new Date(cutoff).toISOString()).toBe("2026-11-12T22:30:00.000Z");
+    const cutoff = lastCutoff(now); // Thursday 17:00 New York
+    expect(new Date(cutoff).toISOString()).toBe("2026-11-12T22:00:00.000Z");
     expect(isFresh(undefined, now, cutoff)).toBe(false);
-    expect(isFresh({ status: "ok", fetched_at: "2026-11-12T23:00:00Z" }, now, cutoff)).toBe(true);
-    expect(isFresh({ status: "ok", fetched_at: "2026-11-12T21:00:00Z" }, now, cutoff)).toBe(false);
+    // Has Thursday's close: fresh.
+    expect(isFresh({ status: "ok", fetched_at: "2026-11-12T23:00:00Z", last_date: "2026-11-12" }, now, cutoff)).toBe(true);
+    // Checked before the cutoff: stale.
+    expect(isFresh({ status: "ok", fetched_at: "2026-11-12T21:00:00Z", last_date: "2026-11-11" }, now, cutoff)).toBe(false);
     expect(isFresh({ status: "not_found", fetched_at: "2026-11-13T00:00:00Z" }, now, cutoff)).toBe(true);
     expect(isFresh({ status: "error", fetched_at: "2026-11-13T18:00:00Z" }, now, cutoff)).toBe(false);
   });
 
-  it("moves the cutoff to today once 17:30 New York has passed, in summer time too", () => {
-    expect(new Date(lastCutoff(Date.parse("2026-07-01T22:00:00Z"))).toISOString()).toBe("2026-07-01T21:30:00.000Z");
+  it("retries a close Tiingo didn't have yet, for four hours after the cutoff", () => {
+    const cutoff = Date.parse("2026-11-12T22:00:00Z"); // Thursday 17:00 New York
+    const at = (iso: string) => Date.parse(iso);
+    const late = (fetched: string) => ({ status: "ok", fetched_at: fetched, last_date: "2026-11-11" });
+    // Checked at 17:00 without Thursday's close: wait 45 minutes, then retry.
+    expect(isFresh(late("2026-11-12T22:00:30Z"), at("2026-11-12T22:30:00Z"), cutoff)).toBe(true);
+    expect(isFresh(late("2026-11-12T22:00:30Z"), at("2026-11-12T23:00:00Z"), cutoff)).toBe(false);
+    // Still missing after the 21:00 check (holiday or delisted): stop until tomorrow.
+    expect(isFresh(late("2026-11-13T02:01:00Z"), at("2026-11-13T03:00:00Z"), cutoff)).toBe(true);
+  });
+
+  it("moves the cutoff to today once 17:00 New York has passed, in summer time too", () => {
+    expect(new Date(lastCutoff(Date.parse("2026-07-01T21:30:00Z"))).toISOString()).toBe("2026-07-01T21:00:00.000Z");
+    expect(new Date(lastCutoff(Date.parse("2026-07-01T20:30:00Z"))).toISOString()).toBe("2026-06-30T21:00:00.000Z");
+  });
+
+  it("skips weekends: Saturday and Sunday still point at Friday's close", () => {
+    const friday = "2026-11-13T22:00:00.000Z";
+    expect(new Date(lastCutoff(Date.parse("2026-11-14T23:00:00Z"))).toISOString()).toBe(friday); // Saturday evening
+    expect(new Date(lastCutoff(Date.parse("2026-11-16T15:00:00Z"))).toISOString()).toBe(friday); // Monday morning
+    expect(new Date(lastCutoff(Date.parse("2026-11-16T22:30:00Z"))).toISOString()).toBe("2026-11-16T22:00:00.000Z");
+  });
+
+  it("knows the New York hour across daylight saving", () => {
+    expect(nyHour(Date.parse("2026-11-13T22:00:00Z"))).toBe(17); // EST
+    expect(nyHour(Date.parse("2026-07-01T21:00:00Z"))).toBe(17); // EDT
   });
 });
