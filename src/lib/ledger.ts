@@ -175,6 +175,7 @@ export function computeState(
 
   const book: Book = { units: new Map(), cash: 0, rejected: [] };
   const fills: Record<string, Fill> = {};
+  const rejections: PortfolioState["rejections"] = {};
   const pendingTx: Tx[] = [];
   let invested = 0;
 
@@ -243,8 +244,12 @@ export function computeState(
         }
         continue;
       }
+      const before = book.rejected.length;
       const fill = applyOrder(book, tx, day, fillPx.get(tx.id)!);
       if (fill) fills[tx.id] = fill;
+      else if (book.rejected.length > before) {
+        rejections[tx.id] = { date: day, reason: book.rejected[book.rejected.length - 1] };
+      }
     }
 
     invested += flow;
@@ -357,6 +362,7 @@ export function computeState(
     rejected: book.rejected,
     pending,
     fills,
+    rejections,
   };
 }
 

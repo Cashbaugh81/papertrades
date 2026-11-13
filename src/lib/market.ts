@@ -44,3 +44,19 @@ export function nyDate(t: number | Date = Date.now()): string {
 export function closesAfter(day: string, placedAt: string): boolean {
   return closeInstant(day) > Date.parse(placedAt);
 }
+
+/** Tiingo publishes end-of-day closes about 90 minutes after the bell. */
+const PUBLISH_DELAY_MS = 90 * 60_000;
+
+/**
+ * The most recent 17:30 New York time at or before `now`: after this, the
+ * day's close should be available from Tiingo. Weekends and holidays just
+ * give a cutoff with no new data behind it, which costs one wasted fetch.
+ */
+export function lastCutoff(now: number = Date.now()): number {
+  const today = nyDate(now);
+  const t = closeInstant(today) + PUBLISH_DELAY_MS;
+  if (t <= now) return t;
+  const yesterday = nyDate(Date.parse(`${today}T12:00:00Z`) - 86_400_000);
+  return closeInstant(yesterday) + PUBLISH_DELAY_MS;
+}

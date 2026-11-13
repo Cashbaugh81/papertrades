@@ -135,6 +135,8 @@ export type PortfolioState = {
   pending: PendingOrder[];
   /** How each filled order filled, by transaction id. */
   fills: Record<string, Fill>;
+  /** Orders that reached their close but could not be filled, by transaction id. */
+  rejections: Record<string, { date: string; reason: string }>;
   lastDate: string;
   /** Trades that could not be filled (insufficient cash, no holding). Surfaced in the UI. */
   rejected: string[];
