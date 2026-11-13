@@ -65,7 +65,7 @@ async function main() {
 
   // ---- landing page -----------------------------------------------------------
   await page.goto(BASE);
-  check("landing page shows", await waitForText(page, /Would you have held on\?/));
+  check("landing page shows", await waitForText(page, /Test your stock skills for free/));
   check("it opens on the summer scare", await waitForText(page, /The summer scare/, 5_000));
   check("three portfolios with photos", (await page.locator('[data-testid="landing-col"] img').count()) === 3);
   await page.waitForFunction(() => [...document.images].filter((i) => i.src.includes("/landing/")).every((i) => i.complete && i.naturalWidth > 0), null, { timeout: 15_000 }).catch(() => {});
@@ -85,7 +85,7 @@ async function main() {
   await page.locator('a:has-text("Start with pretend money")').first().click();
   check("the call to action opens sign-up", await waitForText(page, /Create|Open ledger/, 10_000) && page.url().endsWith("/start"));
   await page.locator('a:has-text("Ledger")').first().click();
-  check("the wordmark goes back to the landing page", await waitForText(page, /Would you have held on\?/, 10_000));
+  check("the wordmark goes back to the landing page", await waitForText(page, /Test your stock skills for free/, 10_000));
   await page.click('nav a:has-text("Sign in")');
 
   // ---- sign in ---------------------------------------------------------------
@@ -204,7 +204,7 @@ async function main() {
   check("cancel returns to the comparison", await waitForText(page, /What-if: chosen with hindsight/, 10_000));
 
   await page.click('button[aria-label="Sign out"]');
-  check("sign out returns to the landing page", await waitForText(page, /Would you have held on\?/, 15_000));
+  check("sign out returns to the landing page", await waitForText(page, /Test your stock skills for free/, 15_000));
 
   const unexpected = badResponses.filter((r) => !/^400 .*\/auth\/v1\/token$/.test(r));
   check("no failed requests except the deliberate bad sign-in", unexpected.length === 0, unexpected.join(" | ") || badResponses.join(" | "));

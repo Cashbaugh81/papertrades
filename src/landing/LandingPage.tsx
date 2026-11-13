@@ -82,22 +82,39 @@ export default function LandingPage() {
 
       <main id="top">
         {/* ---- hero ---- */}
-        <section aria-labelledby="hero-title" className="mx-auto max-w-[1180px] px-6 pb-8 pt-[72px]">
-          <p className="mb-4 text-[13px] uppercase tracking-[0.08em] text-muted">
-            Paper investing · real prices · no real money
-          </p>
-          <h1
-            id="hero-title"
-            style={{ ...serif, fontSize: "clamp(40px, 6vw, 72px)" }}
-            className="m-0 max-w-[820px] font-normal leading-[1.02] tracking-[-0.02em]"
+        <section aria-labelledby="hero-title" className="pb-8 pt-[72px]">
+          <div className="mx-auto max-w-[1180px] px-6">
+            <p className="mb-4 text-[13px] uppercase tracking-[0.08em] text-muted">
+              Paper investing · real prices · not real money
+            </p>
+            <h1
+              id="hero-title"
+              style={{ ...serif, fontSize: "clamp(40px, 6vw, 72px)" }}
+              className="m-0 max-w-[820px] font-normal leading-[1.02] tracking-[-0.02em]"
+            >
+              Test your stock skills for free.
+            </h1>
+          </div>
+
+          {/* Full-width banner. Its painted button isn't real, so the whole image links to sign-up. */}
+          <Link
+            to="/start"
+            aria-label="Learn. Practice. Invest smarter. Start with pretend money"
+            className="mx-auto mt-10 block max-w-[2172px]"
+            data-testid="landing-banner"
           >
-            Would you have held on?
-          </h1>
-          <p className="mt-5 max-w-[640px] text-[19px] leading-[1.55] text-[#3d3a36]">
-            Same $10,000. Same $100 every week. Three different choices. Step through the last six years and watch what
-            each one would have done to your balance, and to you.
-          </p>
-          <div className="mt-7 flex flex-wrap items-center gap-5">
+            <img
+              src={`${BASE}landing/banner-1280.webp`}
+              srcSet={`${BASE}landing/banner-1280.webp 1280w, ${BASE}landing/banner-2172.webp 2172w`}
+              sizes="100vw"
+              width={2172}
+              height={724}
+              alt=""
+              className="block h-auto w-full"
+            />
+          </Link>
+
+          <div className="mx-auto mt-8 flex max-w-[1180px] flex-wrap items-center gap-5 px-6">
             <Link
               to="/start"
               className="inline-flex min-h-12 items-center rounded-md bg-accent px-6 text-[15px] font-semibold text-paper no-underline hover:bg-[#163a2e]"
