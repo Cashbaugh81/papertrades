@@ -1,21 +1,5 @@
 import type { PriceBundle, PriceSeries } from "@/lib/types";
 
-let bundlePromise: Promise<PriceBundle> | null = null;
-
-export function loadPrices(): Promise<PriceBundle> {
-  if (!bundlePromise) {
-    bundlePromise = fetch(`${import.meta.env.BASE_URL}data/prices.json`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`Price data failed to load (${r.status})`);
-        return r.json() as Promise<PriceBundle>;
-      })
-      .catch((err) => {
-        bundlePromise = null;
-        throw err;
-      });
-  }
-  return bundlePromise;
-}
 
 /** ticker -> date -> close, with the trading calendar derived once. */
 export type PriceIndex = {
@@ -86,6 +70,26 @@ export function monthStarts(calendar: string[], from: string, to: string): strin
   for (const d of calendar) {
     if (d < from || d > to) continue;
     const key = d.slice(0, 7);
+    if (key !== lastKey) {
+      out.push(d);
+      lastKey = key;
+    }
+  }
+  return out;
+}
+
+/**
+ * The first trading day of each week (Monday-based) between `from` and `to`.
+ * A holiday Monday moves that week's day to Tuesday, and so on.
+ */
+export function weekStarts(calendar: string[], from: string, to: string): string[] {
+  const out: string[] = [];
+  let lastKey = "";
+  for (const d of calendar) {
+    if (d < from || d > to) continue;
+    const t = Date.parse(`${d}T00:00:00Z`);
+    const dow = (new Date(t).getUTCDay() + 6) % 7; // Monday = 0
+    const key = new Date(t - dow * 86_400_000).toISOString().slice(0, 10);
     if (key !== lastKey) {
       out.push(d);
       lastKey = key;

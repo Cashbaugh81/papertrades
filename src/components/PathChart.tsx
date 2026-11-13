@@ -2,18 +2,25 @@ import { useMemo, useState } from "react";
 import type { PortfolioState } from "@/lib/types";
 import { humanDate, money, shortDate } from "@/lib/ledger";
 
-/** Distinct, paper-friendly line colours. Baseline is drawn in accent and heavier. */
-const STROKE = ["#1F4D3D", "#8A5A12", "#7A3B5C", "#3A5A80", "#5E6B4A", "#7A5C3A"];
+/**
+ * Bold, clearly separate line colours: blue, red, gold (a deep yellow, since a
+ * bright yellow is too faint on white). Checked with the dataviz palette
+ * validator: lightness, chroma, colour-blind separation and contrast all pass.
+ */
+export const SERIES_COLORS = ["#1D4ED8", "#C8102E", "#B8860B"];
+const STROKE = SERIES_COLORS;
 
 type Props = {
   states: PortfolioState[];
   baselineId?: string;
   height?: number;
+  /** Colour per series id. Lets a series keep its colour when another is missing. */
+  colors?: Record<string, string>;
 };
 
 type Hover = { x: number; i: number } | null;
 
-export default function PathChart({ states, baselineId, height = 300 }: Props) {
+export default function PathChart({ states, baselineId, height = 300, colors }: Props) {
   const [hover, setHover] = useState<Hover>(null);
 
   const model = useMemo(() => {
@@ -68,7 +75,7 @@ export default function PathChart({ states, baselineId, height = 300 }: Props) {
       const pts = idx
         .filter((i) => Number.isFinite(s[i]))
         .map((i) => `${x(i).toFixed(1)},${y(s[i]).toFixed(1)}`);
-      return { path: `M${pts.join("L")}`, color: STROKE[si % STROKE.length], name: states[si].name, id: states[si].id };
+      return { path: `M${pts.join("L")}`, color: colors?.[states[si].id] ?? STROKE[si % STROKE.length], name: states[si].name, id: states[si].id };
     });
 
     // Band between the best and worst path: the spread is the product's subject.
@@ -97,7 +104,7 @@ export default function PathChart({ states, baselineId, height = 300 }: Props) {
     }
 
     return { dates, series, min, max, W, H, m, x, y, lines, band, yTicks, xTicks, idx };
-  }, [states, height]);
+  }, [states, height, colors]);
 
   if (!model) {
     return (
@@ -170,7 +177,7 @@ export default function PathChart({ states, baselineId, height = 300 }: Props) {
               d={l.path}
               fill="none"
               stroke={l.color}
-              strokeWidth={l.id === baselineId ? 2.1 : 1.5}
+              strokeWidth={2}
               strokeLinecap="round"
               strokeLinejoin="round"
             />
@@ -208,7 +215,7 @@ export default function PathChart({ states, baselineId, height = 300 }: Props) {
                   cx={x(hoverI)}
                   cy={y(s[hoverI])}
                   r={3}
-                  fill={STROKE[si % STROKE.length]}
+                  fill={colors?.[states[si].id] ?? STROKE[si % STROKE.length]}
                 />
               ) : null,
             )}
@@ -232,7 +239,7 @@ export default function PathChart({ states, baselineId, height = 300 }: Props) {
                 <span className="flex items-center gap-1.5 truncate text-muted">
                   <span
                     className="inline-block size-1.5 shrink-0 rounded-full"
-                    style={{ background: STROKE[si % STROKE.length] }}
+                    style={{ background: colors?.[states[si].id] ?? STROKE[si % STROKE.length] }}
                   />
                   <span className="truncate">{s.name}</span>
                 </span>
@@ -246,7 +253,7 @@ export default function PathChart({ states, baselineId, height = 300 }: Props) {
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
         {lines.map((l) => (
           <span key={l.id} className="flex items-center gap-1.5 text-xs text-muted">
-            <span className="inline-block h-0.5 w-4 rounded-full" style={{ background: l.color }} />
+            <span className="inline-block h-[3px] w-5 rounded-full" style={{ background: l.color }} />
             {l.name}
             {l.id === baselineId && <span className="text-[10px] text-accent">baseline</span>}
           </span>

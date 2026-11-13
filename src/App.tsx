@@ -1,249 +1,245 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
-import type { Account, AccountData, Portfolio, PortfolioState, Tx } from "@/lib/types";
-import { buildIndex, loadPrices, closeOn, type PriceIndex } from "@/lib/prices";
-import { computeAll, baselineId } from "@/lib/ledger";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BrowserRouter } from "react-router-dom";
+import type { Session } from "@supabase/supabase-js";
+import type { Account, PortfolioState, PriceBundle } from "@/lib/types";
+import { buildIndex } from "@/lib/prices";
+import { computeState } from "@/lib/ledger";
+import { lastCutoff, nyDate } from "@/lib/market";
+import { CALENDAR_TICKER, tickersFor } from "@/lib/rows";
+import { supabase } from "@/lib/supabase";
 import {
-  currentAccount,
-  loadData,
-  saveData,
+  addColumn,
+  cancelTx,
+  changeMix,
+  fetchPrices,
+  loadActiveSet,
+  mergeBundles,
   signOut,
-  startFresh,
-} from "@/lib/store";
+  toAccount,
+  type ActiveSet,
+  type Mix,
+  type TickerInfo,
+} from "@/lib/api";
 import AuthPage from "@/pages/AuthPage";
-import ComparisonPage from "@/pages/ComparisonPage";
-import PortfolioPage from "@/pages/PortfolioPage";
-import DecisionsPage from "@/pages/DecisionsPage";
+import DashboardPage from "@/pages/DashboardPage";
+import SetupPage, { DEFAULT_FUND } from "@/pages/SetupPage";
 import Shell from "@/components/Shell";
-
-type ShellProps = {
-  priceIndex: PriceIndex;
-};
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, "")}>
       <Root />
     </BrowserRouter>
   );
 }
 
 function Root() {
-  const [account, setAccount] = useState<Account | null>(() => currentAccount());
-  const [data, setData] = useState<AccountData | null>(null);
-  const [index, setIndex] = useState<PriceIndex | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // undefined while the stored session is being restored.
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [recovering, setRecovering] = useState(false);
 
   useEffect(() => {
-    if (!account) {
-      setData(null);
-      return;
-    }
-    const d = loadData(account.id);
-    setData(d);
-  }, [account]);
+    void supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === "PASSWORD_RECOVERY") setRecovering(true);
+      setSession(s);
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  const user = session?.user;
+  const account = useMemo(
+    () => (user ? toAccount(user) : null),
+    // Token refreshes hand us a new session object for the same person.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [user?.id, user?.email, user?.user_metadata?.name],
+  );
+
+  if (session === undefined) return <Splash text="Opening the ledger…" />;
+  if (recovering && session) {
+    return <AuthPage initialMode="reset" onResetDone={() => setRecovering(false)} />;
+  }
+  if (!account) return <AuthPage />;
+  return <SignedIn key={account.id} account={account} />;
+}
+
+function Splash({ text, detail }: { text: string; detail?: string }) {
+  return (
+    <div className="grid min-h-screen place-items-center bg-paper px-6">
+      <div className="max-w-md text-center">
+        <div className={detail ? "figure text-[22px]" : "micro"}>{text}</div>
+        {detail && <p className="mt-2 text-[13px] leading-relaxed text-muted">{detail}</p>}
+      </div>
+    </div>
+  );
+}
+
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** Ten days before a date, so the first day can fall back to an earlier close. */
+function lookback(day: string): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) - 10 * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * True when the newest close is clearly older than the last one Tiingo should
+ * have published. Weekends and a single holiday don't count.
+ */
+function isStale(lastDate: string): boolean {
+  if (!lastDate) return false;
+  const expected = nyDate(lastCutoff());
+  const gapDays = (Date.parse(expected) - Date.parse(lastDate)) / 86_400_000;
+  return gapDays > 4;
+}
+
+function SignedIn({ account }: { account: Account }) {
+  // undefined while loading; null when the user hasn't started a comparison.
+  const [set, setSet] = useState<ActiveSet | null | undefined>(undefined);
+  const [setup, setSetup] = useState<{ initial?: SetupInitial } | null>(null);
+  const [bundle, setBundle] = useState<PriceBundle | null>(null);
+  const [info, setInfo] = useState<Record<string, TickerInfo>>({});
+  const loadedFrom = useRef<string | null>(null);
+  const [fatal, setFatal] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    setSet(await loadActiveSet());
+  }, []);
 
   useEffect(() => {
+    reload().catch((e) => setFatal(errText(e)));
+  }, [reload]);
+
+  // Prices for every ticker in the comparison (plus SPY, the calendar, and the
+  // default fund), from just before its start date.
+  const needed = useMemo(() => {
+    const s = new Set<string>([CALENDAR_TICKER, DEFAULT_FUND]);
+    for (const c of set?.columns ?? []) for (const t of tickersFor(c.portfolio)) s.add(t);
+    return [...s].sort();
+  }, [set]);
+  const from = useMemo(() => lookback(set?.startDate ?? nyDate()), [set]);
+
+  useEffect(() => {
+    if (set === undefined) return;
+    const widen = !loadedFrom.current || from < loadedFrom.current;
+    const missing = widen ? needed : needed.filter((t) => !bundle?.series[t] && info[t]?.status !== "not_found");
+    if (missing.length === 0) return;
     let alive = true;
-    loadPrices()
-      .then((b) => alive && setIndex(buildIndex(b)))
-      .catch((e) => alive && setError(e instanceof Error ? e.message : "Price data failed to load."));
+    fetchPrices(missing, widen ? from : loadedFrom.current!)
+      .then((r) => {
+        if (!alive) return;
+        if (widen) loadedFrom.current = from;
+        setBundle((b) => (b && !widen ? mergeBundles(b, r.bundle) : r.bundle));
+        setInfo((i) => ({ ...i, ...r.info }));
+      })
+      .catch((e) => {
+        if (!alive) return;
+        if (bundle) setNotice(errText(e));
+        else setFatal(errText(e));
+      });
     return () => {
       alive = false;
     };
-  }, []);
+    // `bundle` and `info` are read to find what's missing, not to trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [set, needed, from]);
 
-  const persist = useCallback((next: AccountData) => {
-    saveData(next);
-    setData(next);
-  }, []);
+  const index = useMemo(() => (bundle ? buildIndex(bundle) : null), [bundle]);
 
-  if (error) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-paper px-6">
-        <div className="max-w-md text-center">
-          <h1 className="figure text-[22px]">The price history did not load</h1>
-          <p className="mt-2 text-[13px] leading-relaxed text-muted">{error}</p>
-          <p className="mt-3 text-[12px] text-muted">
-            Ledger ships a bundled daily series. If this persists, the app was built without
-            <code className="mx-1 rounded bg-rule/50 px-1 py-0.5">public/data/prices.json</code>.
-          </p>
-        </div>
-      </div>
-    );
-  }
+  /** Look a ticker up (and load its prices) as it's typed into a mix. */
+  const lookup = useCallback(
+    async (ticker: string): Promise<TickerInfo | undefined> => {
+      const r = await fetchPrices([ticker], loadedFrom.current ?? from);
+      setBundle((b) => (b ? mergeBundles(b, r.bundle) : r.bundle));
+      setInfo((i) => ({ ...i, ...r.info }));
+      return r.info[ticker];
+    },
+    [from],
+  );
 
-  if (!account) {
-    // Seed the example portfolios with real history so the first sign-in shows an
-    // actual divergence rather than three flat lines. Three years is enough for
-    // the paths to separate without swallowing the whole dataset.
-    return <AuthPage onAuth={(a) => setAccount(a)} seedStart={seedStartFor(index)} />;
-  }
+  const suggestions = useMemo(
+    () => [...new Set([...SUGGESTED, ...Object.keys(info).filter((t) => info[t].status === "ok")])].sort(),
+    [info],
+  );
 
-  if (!index || !data) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-paper">
-        <div className="micro">Loading the ledger…</div>
-      </div>
-    );
-  }
+  const states = useMemo(() => {
+    const m = new Map<string, PortfolioState>();
+    if (!index || !set) return m;
+    for (const c of set.columns) m.set(c.portfolio.id, computeState(index, c.portfolio, index.lastDate));
+    return m;
+  }, [index, set]);
 
-  return (
-    <AppInner
+  if (fatal) return <Splash text="Something didn't load" detail={`${fatal} Try reloading the page.`} />;
+  if (set === undefined || !index) return <Splash text="Loading the ledger…" />;
+
+  const shell = (children: React.ReactNode) => (
+    <Shell
       account={account}
-      data={data}
-      index={index}
-      persist={persist}
-      onStartFresh={() => {
-        const next = startFresh(data);
-        persist({ ...next, account });
-      }}
-      onSignOut={() => {
-        signOut();
-        setAccount(null);
-        setData(null);
-      }}
-    />
-  );
-}
-
-/** A trading day roughly three years back, used to seed the example portfolios. */
-function seedStartFor(index: PriceIndex | null): string | undefined {
-  if (!index) return undefined;
-  const last = index.lastDate;
-  const target = new Date(last + "T00:00:00Z");
-  target.setUTCFullYear(target.getUTCFullYear() - 3);
-  const iso = target.toISOString().slice(0, 10);
-  return index.calendar.find((d) => d >= iso) ?? index.calendar[0];
-}
-
-function AppInner({
-  account,
-  data,
-  index,
-  persist,
-  onSignOut,
-  onStartFresh,
-}: {
-  account: Account;
-  data: AccountData;
-  index: PriceIndex;
-  persist: (d: AccountData) => void;
-  onSignOut: () => void;
-  onStartFresh: () => void;
-}) {
-  const states = useMemo(
-    () => computeAll(index, data.portfolios, index.lastDate),
-    [index, data.portfolios],
-  );
-  const base = baselineId(states);
-
-  const priceFor = useCallback(
-    (ticker: string) => closeOn(index, ticker, index.lastDate),
-    [index],
-  );
-
-  const addTrade = useCallback(
-    (portfolioId: string, tx: Tx) => {
-      const next: AccountData = {
-        ...data,
-        portfolios: data.portfolios.map((p) =>
-          p.id === portfolioId ? { ...p, tx: [...p.tx, tx] } : p,
-        ),
-      };
-      persist(next);
-    },
-    [data, persist],
-  );
-
-  const deleteTrade = useCallback(
-    (portfolioId: string, txId: string) => {
-      const next: AccountData = {
-        ...data,
-        portfolios: data.portfolios.map((p) =>
-          p.id === portfolioId ? { ...p, tx: p.tx.filter((t) => t.id !== txId) } : p,
-        ),
-      };
-      persist(next);
-    },
-    [data, persist],
-  );
-
-  return (
-    <Shell account={account} asOf={index.lastDate} onSignOut={onSignOut} stale>
-      <Routes>
-        <Route
-          path="/"
-          element={
-            <ComparisonPage
-              states={states}
-              portfolios={data.portfolios}
-              index={index}
-              onStartFresh={onStartFresh}
-            />
-          }
-        />
-        <Route
-          path="/decisions"
-          element={
-            <DecisionsPage portfolios={data.portfolios} states={states} index={index} />
-          }
-        />
-        <Route
-          path="/p/:id"
-          element={
-            <PortfolioRoute
-              portfolios={data.portfolios}
-              states={states}
-              index={index}
-              baselineId={base}
-              priceFor={priceFor}
-              onTrade={addTrade}
-              onDeleteTx={deleteTrade}
-            />
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      asOf={index.lastDate}
+      onSignOut={() => void signOut()}
+      stale={isStale(index.lastDate)}
+      notice={notice ? { text: notice, onDismiss: () => setNotice(null) } : null}
+    >
+      {children}
     </Shell>
   );
-}
 
-function PortfolioRoute({
-  portfolios,
-  states,
-  index,
-  baselineId: base,
-  priceFor,
-  onTrade,
-  onDeleteTx,
-}: {
-  portfolios: Portfolio[];
-  states: PortfolioState[];
-  index: PriceIndex;
-  baselineId?: string;
-  priceFor: (t: string) => number | undefined;
-  onTrade: (portfolioId: string, tx: Tx) => void;
-  onDeleteTx: (portfolioId: string, txId: string) => void;
-}) {
-  const { id } = useParams<{ id: string }>();
-  const portfolio = portfolios.find((p) => p.id === id);
-  const state = states.find((s) => s.id === id);
+  if (!set || setup) {
+    return shell(
+      <SetupPage
+        key={setup ? "again" : "first"}
+        info={info}
+        lookup={lookup}
+        suggestions={suggestions}
+        initial={setup?.initial}
+        onCancel={set ? () => setSetup(null) : undefined}
+        onCreated={() => {
+          setSetup(null);
+          reload().catch((e) => setNotice(errText(e)));
+        }}
+      />,
+    );
+  }
 
-  if (!portfolio || !state) return <Navigate to="/" replace />;
+  const mixesBySlot = [1, 2, 3].map((slot) => {
+    const c = set.columns.find((x) => x.slot === slot);
+    const s = c ? states.get(c.portfolio.id) : undefined;
+    return s?.currentWeights ?? c?.portfolio.tx.find((t) => t.kind === "rebalance")?.weights;
+  });
 
-  return (
-    <PortfolioPage
-      portfolio={portfolio}
-      state={state}
-      index={index}
+  return shell(
+    <DashboardPage
+      set={set}
       states={states}
-      baseline={states.find((s) => s.id === base)}
-      onTrade={(tx) => onTrade(portfolio.id, tx)}
-      onDeleteTx={(txId) => onDeleteTx(portfolio.id, txId)}
-      priceFor={priceFor}
-    />
+      info={info}
+      lookup={lookup}
+      suggestions={suggestions}
+      pricesThrough={index.lastDate}
+      onChangeMix={async (pid, mix, note) => {
+        await changeMix(pid, mix, note);
+        await reload();
+      }}
+      onAddColumn={async (slot, mix) => {
+        await addColumn(set.id, slot, mix);
+        await reload();
+      }}
+      onCancelTx={(txId) => {
+        cancelTx(txId)
+          .then((gone) => {
+            if (!gone) setNotice("That has already happened and can't be cancelled.");
+            return reload();
+          })
+          .catch((e) => setNotice(errText(e)));
+      }}
+      onChangeDate={() =>
+        setSetup({ initial: { amount: set.initial, weekly: set.weekly, startDate: set.startDate, mixes: mixesBySlot } })
+      }
+      onStartOver={() => setSetup({ initial: undefined })}
+    />,
   );
 }
 
-export type { ShellProps };
+/** Common funds offered as suggestions while typing a ticker. */
+const SUGGESTED = ["VTI", "VOO", "SPY", "QQQ", "DIA", "BND", "VXUS", "SCHD", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"];
+
+type SetupInitial = { amount: number; weekly: number; startDate?: string; mixes?: (Mix | undefined)[] };

@@ -1,34 +1,63 @@
 import { useState } from "react";
 import { Lock } from "lucide-react";
-import type { Account } from "@/lib/types";
-import { signIn, signUp } from "@/lib/store";
+import { sendPasswordReset, setNewPassword, signIn, signUp } from "@/lib/api";
 
-type Props = { onAuth: (a: Account) => void; seedStart?: string };
+type Mode = "up" | "in" | "forgot" | "reset";
 
-export default function AuthPage({ onAuth, seedStart }: Props) {
-  const [mode, setMode] = useState<"in" | "up">("up");
+type Props = {
+  /** "reset" when the user arrived from a password-reset email. */
+  initialMode?: Mode;
+  /** Called after a new password is saved in "reset" mode. */
+  onResetDone?: () => void;
+};
+
+export default function AuthPage({ initialMode = "in", onResetDone }: Props) {
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [secret, setSecret] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  function go(next: Mode) {
+    setMode(next);
+    setError(null);
+    setNotice(null);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
-      const account =
-        mode === "up"
-          ? await signUp(email, name, secret, seedStart)
-          : await signIn(email, secret);
-      onAuth(account);
+      if (mode === "up") {
+        await signUp(email, secret, name); // signs in on success
+      } else if (mode === "in") {
+        await signIn(email, secret);
+      } else if (mode === "forgot") {
+        await sendPasswordReset(email);
+        setNotice(`If ${email.trim()} has an account, a reset link is on its way.`);
+      } else {
+        await setNewPassword(secret);
+        onResetDone?.();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setBusy(false);
     }
   }
+
+  const title = { up: "Open your ledger", in: "Sign in", forgot: "Reset your password", reset: "Choose a new password" }[mode];
+  const subtitle = {
+    up: "Then choose up to three portfolios to compare, starting today.",
+    in: "Welcome back.",
+    forgot: "We'll email you a link to set a new one.",
+    reset: "You followed a reset link. Set a new password to continue.",
+  }[mode];
+  const cta = { up: "Open ledger", in: "Sign in", forgot: "Send reset link", reset: "Save password" }[mode];
 
   return (
     <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
@@ -54,27 +83,24 @@ export default function AuthPage({ onAuth, seedStart }: Props) {
 
       <div className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm">
-          <h2 className="figure text-[26px] tracking-tight">
-            {mode === "up" ? "Open your ledger" : "Sign in"}
-          </h2>
-          <p className="mt-1 text-[13px] text-muted">
-            {mode === "up"
-              ? "Three portfolios are set up for you to compare from day one."
-              : "Welcome back."}
-          </p>
+          <div className="figure mb-6 text-[19px] font-semibold lg:hidden">Ledger</div>
+          <h2 className="figure text-[26px] tracking-tight">{title}</h2>
+          <p className="mt-1 text-[13px] text-muted">{subtitle}</p>
 
           <form onSubmit={submit} className="mt-7 space-y-4">
-            <label className="block">
-              <span className="micro">Email</span>
-              <input
-                type="email"
-                required
-                autoComplete="username"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 w-full rounded-sm border border-rule bg-surface px-3 py-2.5 text-sm"
-              />
-            </label>
+            {mode !== "reset" && (
+              <label className="block">
+                <span className="micro">Email</span>
+                <input
+                  type="email"
+                  required
+                  autoComplete="username"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="mt-1 w-full rounded-sm border border-rule bg-surface px-3 py-2.5 text-sm"
+                />
+              </label>
+            )}
 
             {mode === "up" && (
               <label className="block">
@@ -89,19 +115,26 @@ export default function AuthPage({ onAuth, seedStart }: Props) {
               </label>
             )}
 
-            <label className="block">
-              <span className="micro">Password</span>
-              <input
-                type="password"
-                required
-                minLength={6}
-                autoComplete={mode === "up" ? "new-password" : "current-password"}
-                value={secret}
-                onChange={(e) => setSecret(e.target.value)}
-                className="mt-1 w-full rounded-sm border border-rule bg-surface px-3 py-2.5 text-sm"
-              />
-            </label>
+            {mode !== "forgot" && (
+              <label className="block">
+                <span className="micro">{mode === "reset" ? "New password" : "Password"}</span>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  autoComplete={mode === "in" ? "current-password" : "new-password"}
+                  value={secret}
+                  onChange={(e) => setSecret(e.target.value)}
+                  className="mt-1 w-full rounded-sm border border-rule bg-surface px-3 py-2.5 text-sm"
+                />
+              </label>
+            )}
 
+            {notice && (
+              <p role="status" className="rounded-sm border-l-2 border-gain bg-gain/5 px-3 py-2 text-xs text-ink">
+                {notice}
+              </p>
+            )}
             {error && (
               <p role="alert" className="rounded-sm border-l-2 border-loss bg-loss/5 px-3 py-2 text-xs text-loss">
                 {error}
@@ -113,30 +146,39 @@ export default function AuthPage({ onAuth, seedStart }: Props) {
               disabled={busy}
               className="w-full rounded-sm bg-accent px-4 py-2.5 text-sm font-medium text-paper transition-colors duration-150 hover:bg-accent/90 active:translate-y-px disabled:opacity-50"
             >
-              {busy ? "Working…" : mode === "up" ? "Open ledger" : "Sign in"}
+              {busy ? "Working…" : cta}
             </button>
           </form>
 
-          <button
-            onClick={() => {
-              setMode(mode === "up" ? "in" : "up");
-              setError(null);
-            }}
-            className="mt-4 text-[12px] text-muted underline decoration-rule underline-offset-2 transition-colors hover:text-ink"
-          >
-            {mode === "up" ? "I already have an account" : "I need an account"}
-          </button>
+          {mode !== "reset" && (
+            <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-[12px]">
+              {mode !== "in" && <SwitchLink onClick={() => go("in")}>I already have an account</SwitchLink>}
+              {mode !== "up" && <SwitchLink onClick={() => go("up")}>I need an account</SwitchLink>}
+              {mode === "in" && <SwitchLink onClick={() => go("forgot")}>Forgot password?</SwitchLink>}
+            </div>
+          )}
 
           <p className="mt-8 flex items-start gap-2 rounded-sm border border-rule bg-surface/60 px-3 py-2.5 text-[11px] leading-snug text-muted">
             <Lock size={12} className="mt-0.5 shrink-0" />
             <span>
-              This account lives in this browser only. There is no server, so it will not sync to
-              another device, and clearing site data deletes it. The password locks the ledger on
-              this machine — it is not security against anyone using your browser profile.
+              Your portfolios are stored in your account and sync across devices. Paper money only:
+              there is no brokerage connection.
             </span>
           </p>
         </div>
       </div>
     </div>
+  );
+}
+
+function SwitchLink({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-muted underline decoration-rule underline-offset-2 transition-colors hover:text-ink"
+    >
+      {children}
+    </button>
   );
 }

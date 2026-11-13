@@ -5,7 +5,7 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "paths": { "@/*": ["./src/*"] },
-    "types": ["node"],
+    "types": ["node", "vite/client"],
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true,
