@@ -11,7 +11,7 @@
 import { mkdirSync } from "node:fs";
 import { chromium, type Page } from "playwright-core";
 
-const BASE = process.env.BASE ?? "http://localhost:4173";
+const BASE = process.env.BASE ?? "http://localhost:4173/papertrades/";
 const EMAIL = process.env.E2E_EMAIL!;
 const PASSWORD = process.env.E2E_PASSWORD!;
 const OUT = "checks/out";

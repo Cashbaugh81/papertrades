@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { History, Info } from "lucide-react";
 import MixEditor, { mixFromRows, rowsFromMix, type Row } from "@/components/MixEditor";
-import PathChart from "@/components/PathChart";
+import PathChart, { SERIES_COLORS } from "@/components/PathChart";
 import { ErrorNote } from "@/pages/SetupPage";
 import type { ActiveSet, Column, Mix, TickerInfo } from "@/lib/api";
 import { humanDate, money, pct, signedPct } from "@/lib/ledger";
@@ -34,6 +34,11 @@ export default function DashboardPage(props: Props) {
   const bySlot = new Map(set.columns.map((c) => [c.slot, c]));
   const baseline = bySlot.get(1) ? states.get(bySlot.get(1)!.portfolio.id) : undefined;
   const chartStates = set.columns.map((c) => states.get(c.portfolio.id)!).filter(Boolean);
+  // Colour follows the slot, so portfolio 3 stays gold even if 2 is empty.
+  const colors = useMemo(
+    () => Object.fromEntries(set.columns.map((c) => [c.portfolio.id, SERIES_COLORS[c.slot - 1]])),
+    [set.columns],
+  );
 
   return (
     <div className="space-y-8">
@@ -95,7 +100,7 @@ export default function DashboardPage(props: Props) {
           <span className="micro">value of each portfolio over time</span>
         </div>
         <div className="rounded-sm border border-rule bg-surface p-4">
-          <PathChart states={chartStates} baselineId={baseline?.id} />
+          <PathChart states={chartStates} baselineId={baseline?.id} colors={colors} />
         </div>
         <p className="mt-2 text-[12px] leading-relaxed text-muted">
           <strong className="font-medium text-ink">Biggest drop</strong> is the worst fall from a high point along the way,
@@ -155,8 +160,13 @@ function ColumnCard({
   return (
     <section className="flex flex-col rounded-sm border border-rule bg-surface p-4" data-testid={`col-${column.slot}`}>
       <div className="flex items-baseline justify-between gap-2">
-        <h2 className="truncate text-[14px] font-medium" title={p.name}>
-          {p.name}
+        <h2 className="flex min-w-0 items-center gap-2 text-[14px] font-medium" title={p.name}>
+          <span
+            aria-hidden
+            className="inline-block h-[3px] w-4 shrink-0 rounded-full"
+            style={{ background: SERIES_COLORS[column.slot - 1] }}
+          />
+          <span className="truncate">{p.name}</span>
         </h2>
         <span className="micro shrink-0">{column.slot === 1 ? "baseline" : `portfolio ${column.slot}`}</span>
       </div>

@@ -3,16 +3,11 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+// The site is served from https://cashbaugh81.github.io/papertrades/, so every
+// asset and route lives under /papertrades/. Dev and preview use the same base
+// (http://localhost:5173/papertrades/) so nothing differs between them.
 export default defineConfig({
+  base: "/papertrades/",
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
-  server: {
-    // 反代直连容器 IP, 必须监听 0.0.0.0
-    host: true,
-    // 预览域名走 *.moltly.ai —— 不列白名单 vite 会 "Blocked request.
-    // This host is not allowed."
-    allowedHosts: [".moltly.ai"],
-    // HMR 经 443 回源, 客户端要显式指定端口, 否则拼成 wss://host:/
-    hmr: { clientPort: 443 },
-  },
 });

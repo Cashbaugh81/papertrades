@@ -27,7 +27,7 @@ import Shell from "@/components/Shell";
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, "")}>
       <Root />
     </BrowserRouter>
   );
