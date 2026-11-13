@@ -22,10 +22,18 @@ Prices are read from `public/data/prices.json`: daily adjusted closes for 59 tic
 4. **Data is stored in the browser only.** Nothing syncs between devices.
 5. **Target weights never rebalance.** They only apply to new contributions, so concentrated portfolios drift over time.
 
+## Server (Supabase)
+
+- `supabase/migrations/`: the schema, row-level security, `price_series`, and the nightly schedule.
+- `supabase/functions/prices`: signed-in users ask for tickers. Any that are missing or stale are fetched from Tiingo (adjusted closes) and cached. The Tiingo key stays on the server.
+- `supabase/functions/nightly-close`: runs at 20:30 New York time on weekdays, scheduled by pg_cron. It refreshes the tickers in use, then fills or rejects pending orders by running the app's own engine.
+- `supabase/functions/_shared/engine.js` is **generated**. After changing anything in `src/lib` or `src/server`, run `npm run build:engine` and redeploy both functions.
+
 ## Tests
 
 ```bash
-npm test           # vitest: fills, pending orders, market clock, time-weighted metrics
+npm test           # vitest: fills, pending orders, market clock, time-weighted metrics,
+                   # settlement, Tiingo parsing and refresh rules
 ```
 
 ## Layout
