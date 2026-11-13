@@ -104,8 +104,8 @@ export default function LandingPage() {
             data-testid="landing-banner"
           >
             <img
-              src={`${BASE}landing/banner-1280.webp`}
-              srcSet={`${BASE}landing/banner-1280.webp 1280w, ${BASE}landing/banner-2172.webp 2172w`}
+              src={`${BASE}landing/banner-cropped-1280.webp`}
+              srcSet={`${BASE}landing/banner-cropped-1280.webp 1280w, ${BASE}landing/banner-cropped-2172.webp 2172w`}
               sizes="100vw"
               width={2172}
               height={682}
