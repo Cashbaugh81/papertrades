@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useState } from "react";
 import { Lock } from "lucide-react";
 import { sendPasswordReset, setNewPassword, signIn, signUp } from "@/lib/api";
@@ -18,7 +18,10 @@ export default function AuthPage({ initialMode = "in", onResetDone }: Props) {
   const [name, setName] = useState("");
   const [secret, setSecret] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const location = useLocation();
+  const [notice, setNotice] = useState<string | null>(
+    () => (location.state as { notice?: string } | null)?.notice ?? null,
+  );
   const [busy, setBusy] = useState(false);
 
   function go(next: Mode) {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import type { Account, PortfolioState, PriceBundle } from "@/lib/types";
 import { buildIndex } from "@/lib/prices";
@@ -14,6 +14,7 @@ import {
   fetchPrices,
   loadActiveSet,
   mergeBundles,
+  SessionEnded,
   signOut,
   toAccount,
   type ActiveSet,
@@ -81,12 +82,30 @@ function Root() {
   );
 }
 
-function Splash({ text, detail }: { text: string; detail?: string }) {
+function Splash({ text, detail, onSignOut }: { text: string; detail?: string; onSignOut?: () => void }) {
   return (
     <div className="grid min-h-screen place-items-center bg-paper px-6">
       <div className="max-w-md text-center">
         <div className={detail ? "figure text-[22px]" : "micro"}>{text}</div>
         {detail && <p className="mt-2 text-[13px] leading-relaxed text-muted">{detail}</p>}
+        {onSignOut && (
+          <div className="mt-5 flex justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="min-h-11 rounded-md bg-accent px-5 text-[14px] font-semibold text-paper"
+            >
+              Reload
+            </button>
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="min-h-11 rounded-md border border-rule bg-surface px-5 text-[14px] font-medium text-ink"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -119,6 +138,14 @@ function SignedIn({ account }: { account: Account }) {
   const loadedFrom = useRef<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const navigate = useNavigate();
+
+  /** A session the server no longer accepts: sign out here and ask for a fresh sign-in. */
+  const endSession = useCallback(() => {
+    void signOut().then(() =>
+      navigate("/signin", { replace: true, state: { notice: "Your session ended. Please sign in again." } }),
+    );
+  }, [navigate]);
 
   const reload = useCallback(async () => {
     setSet(await loadActiveSet());
@@ -152,6 +179,7 @@ function SignedIn({ account }: { account: Account }) {
       })
       .catch((e) => {
         if (!alive) return;
+        if (e instanceof SessionEnded) return endSession();
         if (bundle) setNotice(errText(e));
         else setFatal(errText(e));
       });
@@ -187,7 +215,8 @@ function SignedIn({ account }: { account: Account }) {
     return m;
   }, [index, set]);
 
-  if (fatal) return <Splash text="Something didn't load" detail={`${fatal} Try reloading the page.`} />;
+  if (fatal)
+    return <Splash text="Something didn't load" detail={`${fatal} Try reloading the page.`} onSignOut={() => void signOut()} />;
   if (set === undefined || !index) return <Splash text="Loading the ledger…" />;
 
   const shell = (children: React.ReactNode) => (

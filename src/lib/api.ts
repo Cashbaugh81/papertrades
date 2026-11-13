@@ -61,8 +61,17 @@ export async function setNewPassword(password: string): Promise<void> {
   if (error) throw new Error(friendlyAuthError(error.message));
 }
 
+/** Sign out on this device only; other devices stay signed in. */
 export async function signOut(): Promise<void> {
-  await supabase.auth.signOut();
+  await supabase.auth.signOut({ scope: "local" });
+}
+
+/** The server no longer accepts this device's session (e.g. it was signed out elsewhere). */
+export class SessionEnded extends Error {
+  constructor() {
+    super("Your session has ended. Please sign in again.");
+    this.name = "SessionEnded";
+  }
 }
 
 function friendlyAuthError(msg: string): string {
@@ -203,7 +212,11 @@ export async function fetchPrices(tickers: string[], from: string): Promise<Pric
       invalid: string[];
       series: SeriesRow[];
     }>("prices", { body: { tickers: chunk, from } });
-    if (error) throw new Error(`Prices failed to load: ${error.message}`);
+    if (error) {
+      const status = (error as { context?: { status?: number } }).context?.status;
+      if (status === 401) throw new SessionEnded();
+      throw new Error(`Prices failed to load: ${error.message}`);
+    }
     if (!data) throw new Error("Prices failed to load.");
     Object.assign(info, data.tickers);
     invalid.push(...data.invalid);
