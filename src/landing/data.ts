@@ -24,7 +24,7 @@ export type Moment = {
   cols: [number, number, Mood][];
 };
 
-export const DEFAULT_MOMENT = "2024-08";
+export const DEFAULT_MOMENT = "2020-01";
 
 export const MOMENTS: Moment[] = [
   {

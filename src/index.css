@@ -94,3 +94,18 @@
     }
   }
 }
+
+/* Landing replay: the active moment's pill fills while it waits to move on. */
+@keyframes pill-progress {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.pill-progress {
+  transform-origin: left;
+  animation-name: pill-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pill-progress { display: none; }
+}

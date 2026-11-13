@@ -66,7 +66,12 @@ async function main() {
   // ---- landing page -----------------------------------------------------------
   await page.goto(BASE);
   check("landing page shows", await waitForText(page, /Test your stock skills for free/));
-  check("it opens on the summer scare", await waitForText(page, /The summer scare/, 5_000));
+  check("it opens on January 2020", await waitForText(page, /Day one/, 5_000));
+  check("after 5 seconds it moves to the next moment", await waitForText(page, /Just after the COVID crash/, 7_000));
+  await page.click('[data-testid="moment-play"]');
+  await page.waitForTimeout(6_000);
+  check("pause stops the replay", await page.getByText("Just after the COVID crash").isVisible());
+  await page.click('[data-testid="moment-play"]');
   check("three portfolios with photos", (await page.locator('[data-testid="landing-col"] img').count()) === 3);
   await page.waitForFunction(() => [...document.images].filter((i) => i.src.includes("/landing/")).every((i) => i.complete && i.naturalWidth > 0), null, { timeout: 15_000 }).catch(() => {});
   check("photos load", await page.evaluate(() => [...document.images].filter((i) => i.src.includes("/landing/")).every((i) => i.naturalWidth > 0)));
@@ -76,6 +81,9 @@ async function main() {
   check("the chip mix shows its worth then", /\$30,814/.test(await page.locator('[data-testid="landing-worth"]').nth(1).innerText()));
   await page.click('button[aria-label="Later moment"]');
   check("the arrow steps forward", await waitForText(page, /The summer scare/, 5_000));
+  await page.click('button:has-text("Nov 2026")');
+  check("after the last moment it starts again from January 2020", await waitForText(page, /Day one/, 7_000));
+  check("the new pill leads to sign-up", (await page.getAttribute('[data-testid="moment-cta"]', "href"))?.endsWith("/start") ?? false);
   await page.setViewportSize({ width: 320, height: 900 });
   await page.waitForTimeout(300);
   const landOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

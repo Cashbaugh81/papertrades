@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { COLUMNS, DEFAULT_MOMENT, ENDINGS, MOMENTS, MOODS, PHOTO_ALT, SERIES } from "@/landing/data";
 
@@ -25,12 +25,34 @@ function sparkline(series: number[], upto: number) {
 }
 
 const pillBase =
-  "min-h-11 whitespace-nowrap rounded-full border px-4 text-[14px] font-medium transition-colors duration-150";
+  "relative min-h-11 overflow-hidden whitespace-nowrap rounded-full border px-4 text-[14px] font-medium transition-colors duration-150";
+
+/** How long each moment stays up before the replay moves on. */
+const STEP_MS = 5000;
+
+const prefersReducedMotion = () =>
+  typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 export default function LandingPage() {
-  const [key, setKey] = useState(DEFAULT_MOMENT);
+  const [key, setKeyState] = useState(DEFAULT_MOMENT);
+  // Bumped on every pick, so picking restarts the 5-second wait even on the same moment.
+  const [pick, setPick] = useState(0);
+  // Plays by default; starts paused for people who ask their system for less motion.
+  const [playing, setPlaying] = useState(() => !prefersReducedMotion());
   const at = Math.max(0, MOMENTS.findIndex((m) => m.key === key));
   const m = MOMENTS[at];
+
+  const setKey = (k: string) => {
+    setKeyState(k);
+    setPick((n) => n + 1);
+  };
+
+  // Move one moment to the right every 5 seconds; after the last, start again.
+  useEffect(() => {
+    if (!playing) return;
+    const t = window.setTimeout(() => setKeyState(MOMENTS[(at + 1) % MOMENTS.length].key), STEP_MS);
+    return () => window.clearTimeout(t);
+  }, [at, pick, playing]);
 
   const cols = useMemo(
     () =>
@@ -150,9 +172,25 @@ export default function LandingPage() {
                     className={`${pillBase} ${on ? "border-ink bg-ink text-paper" : "border-[#d9cfbe] bg-surface text-ink hover:border-ink"}`}
                   >
                     {mm.label}
+                    {on && playing && (
+                      // Fills over 5 seconds, so it's clear the replay is about to move on.
+                      <span
+                        key={`${mm.key}-${pick}`}
+                        aria-hidden
+                        className="pill-progress absolute bottom-0 left-0 h-[3px] w-full bg-paper/70"
+                        style={{ animationDuration: `${STEP_MS}ms` }}
+                      />
+                    )}
                   </button>
                 );
               })}
+              <Link
+                to="/start"
+                className={`${pillBase} inline-flex items-center border-accent bg-accent text-paper no-underline hover:bg-[#163a2e]`}
+                data-testid="moment-cta"
+              >
+                Keep track as the market moves
+              </Link>
             </div>
             <StepButton
               label="Later moment"
@@ -161,15 +199,32 @@ export default function LandingPage() {
             />
           </div>
 
-          <div className="mb-5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2" aria-live="polite">
+          <div
+            className="mb-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-2"
+            aria-live={playing ? "off" : "polite"}
+          >
             <p style={serif} className="m-0 text-[28px] leading-[1.2]">
               {m.label}
               <span className="text-muted"> · </span>
               {m.title}
             </p>
-            <p className="m-0 text-[14px] text-muted">
-              Put into each so far: <strong className="font-semibold text-ink">{money(m.put)}</strong>
-            </p>
+            <div className="flex items-center gap-4">
+              <p className="m-0 text-[14px] text-muted">
+                Put into each so far: <strong className="font-semibold text-ink">{money(m.put)}</strong>
+              </p>
+              <button
+                type="button"
+                onClick={() => setPlaying((p) => !p)}
+                aria-label={playing ? "Pause the replay" : "Play the replay"}
+                data-testid="moment-play"
+                className="flex h-11 shrink-0 items-center gap-2 rounded-full border border-[#d9cfbe] bg-surface px-4 text-[14px] font-medium text-ink hover:border-ink"
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden>
+                  {playing ? <path d="M3 2h3v10H3zM8 2h3v10H8z" /> : <path d="M3.5 1.8v10.4L12 7z" />}
+                </svg>
+                {playing ? "Pause" : "Play"}
+              </button>
+            </div>
           </div>
           <p className="mb-6 max-w-[760px] text-[16px] leading-[1.55] text-[#3d3a36]">{m.story}</p>
 
