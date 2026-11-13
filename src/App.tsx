@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import type { Account, PortfolioState, PriceBundle } from "@/lib/types";
 import { buildIndex } from "@/lib/prices";
@@ -21,6 +21,7 @@ import {
   type TickerInfo,
 } from "@/lib/api";
 import AuthPage from "@/pages/AuthPage";
+import LandingPage from "@/landing/LandingPage";
 import DashboardPage from "@/pages/DashboardPage";
 import SetupPage, { DEFAULT_FUND } from "@/pages/SetupPage";
 import Shell from "@/components/Shell";
@@ -47,6 +48,16 @@ function Root() {
     return () => data.subscription.unsubscribe();
   }, []);
 
+  // The router writes its root as "/papertrades" (no slash); the static host
+  // only serves "/papertrades/", so a reload there would 404. Keep the slash.
+  const location = useLocation();
+  useEffect(() => {
+    const base = import.meta.env.BASE_URL;
+    if (window.location.pathname === base.replace(/\/$/, "")) {
+      window.history.replaceState(window.history.state, "", base + window.location.search + window.location.hash);
+    }
+  }, [location]);
+
   const user = session?.user;
   const account = useMemo(
     () => (user ? toAccount(user) : null),
@@ -59,8 +70,15 @@ function Root() {
   if (recovering && session) {
     return <AuthPage initialMode="reset" onResetDone={() => setRecovering(false)} />;
   }
-  if (!account) return <AuthPage />;
-  return <SignedIn key={account.id} account={account} />;
+  const home = account ? <SignedIn key={account.id} account={account} /> : <LandingPage />;
+  return (
+    <Routes>
+      <Route path="/" element={home} />
+      <Route path="/signin" element={account ? <Navigate to="/" replace /> : <AuthPage key="in" initialMode="in" />} />
+      <Route path="/start" element={account ? <Navigate to="/" replace /> : <AuthPage key="up" initialMode="up" />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
 }
 
 function Splash({ text, detail }: { text: string; detail?: string }) {
