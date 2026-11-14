@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
-import { History, Info } from "lucide-react";
+import { History, Info, Plus } from "lucide-react";
 import MixEditor, { mixFromRows, rowsFromMix, type Row } from "@/components/MixEditor";
 import PathChart, { SERIES_COLORS } from "@/components/PathChart";
-import { ErrorNote } from "@/pages/SetupPage";
+import { ErrorNote, MAX_PORTFOLIOS } from "@/pages/SetupPage";
 import type { ActiveSet, Column, Mix, TickerInfo } from "@/lib/api";
 import { humanDate, money, pct, signedPct } from "@/lib/ledger";
 import type { PortfolioState, Tx } from "@/lib/types";
@@ -33,6 +33,14 @@ export default function DashboardPage(props: Props) {
   const { set, states, pricesThrough, onChangeDate, onStartOver } = props;
   const bySlot = new Map(set.columns.map((c) => [c.slot, c]));
   const baseline = bySlot.get(1) ? states.get(bySlot.get(1)!.portfolio.id) : undefined;
+  // "+" opens an add card for the lowest free slot. Slots 1–3 always show
+  // (empty ones as a prompt); later ones appear once filled or being added.
+  const [adding, setAdding] = useState<{ slot: number; n: number } | null>(null);
+  const freeSlots = Array.from({ length: MAX_PORTFOLIOS }, (_, i) => i + 1).filter((s) => !bySlot.has(s));
+  const nextFree = freeSlots[0];
+  const shownSlots = [...new Set([1, 2, 3, ...bySlot.keys(), ...(adding && !bySlot.has(adding.slot) ? [adding.slot] : [])])].sort(
+    (a, b) => a - b,
+  );
   const chartStates = set.columns.map((c) => states.get(c.portfolio.id)!).filter(Boolean);
   // Colour follows the slot, so portfolio 3 stays gold even if 2 is empty.
   const colors = useMemo(
@@ -97,17 +105,44 @@ export default function DashboardPage(props: Props) {
         </p>
       )}
 
-      {/* ---- the three columns ---------------------------------------------- */}
-      <div className="grid gap-4 md:grid-cols-3">
-        {[1, 2, 3].map((slot) => {
-          const col = bySlot.get(slot);
-          return col ? (
-            <ColumnCard key={slot} {...props} column={col} state={states.get(col.portfolio.id)!} baseline={slot === 1 ? undefined : baseline} />
-          ) : (
-            <EmptyColumn key={slot} {...props} slot={slot} />
-          );
-        })}
-      </div>
+      {/* ---- the portfolios ------------------------------------------------------ */}
+      <section aria-labelledby="portfolios-title">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 id="portfolios-title" className="flex items-baseline gap-2 text-[15px] font-medium">
+            Portfolios
+            <span className="micro">
+              {bySlot.size} of {MAX_PORTFOLIOS}
+            </span>
+          </h2>
+          <button
+            type="button"
+            onClick={() => nextFree && setAdding({ slot: nextFree, n: (adding?.n ?? 0) + 1 })}
+            disabled={!nextFree}
+            aria-label="Add a portfolio"
+            title={nextFree ? "Add a portfolio" : `You have the most allowed (${MAX_PORTFOLIOS})`}
+            data-testid="add-portfolio"
+            className="flex size-9 items-center justify-center rounded-sm border border-rule bg-surface text-ink hover:border-ink/40 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Plus size={18} aria-hidden />
+          </button>
+        </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          {shownSlots.map((slot) => {
+            const col = bySlot.get(slot);
+            return col ? (
+              <ColumnCard key={slot} {...props} column={col} state={states.get(col.portfolio.id)!} baseline={slot === 1 ? undefined : baseline} />
+            ) : (
+              <EmptyColumn
+                key={`${slot}-${adding?.slot === slot ? adding.n : 0}`}
+                {...props}
+                slot={slot}
+                startOpen={adding?.slot === slot}
+                onClose={() => setAdding(null)}
+              />
+            );
+          })}
+        </div>
+      </section>
 
       {/* ---- the paths -------------------------------------------------------- */}
       <section>
@@ -292,8 +327,21 @@ function ColumnCard({
   );
 }
 
-function EmptyColumn({ slot, set, info, lookup, suggestions, onAddColumn }: Props & { slot: number }) {
-  const [open, setOpen] = useState(false);
+function EmptyColumn({
+  slot,
+  set,
+  info,
+  lookup,
+  suggestions,
+  onAddColumn,
+  startOpen = false,
+  onClose,
+}: Props & { slot: number; startOpen?: boolean; onClose?: () => void }) {
+  const [open, setOpenState] = useState(startOpen);
+  const setOpen = (o: boolean) => {
+    setOpenState(o);
+    if (!o) onClose?.();
+  };
   const [rows, setRows] = useState<Row[]>([{ ticker: "", pct: "100" }]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -323,7 +371,7 @@ function EmptyColumn({ slot, set, info, lookup, suggestions, onAddColumn }: Prop
           <p className="text-[11px] leading-snug text-muted">
             {set.whatIf
               ? `Replays from ${humanDate(set.startDate)} like the others.`
-              : "Its money is invested at the next close, so it starts later than the others."}
+              : "Starts at the same close as the others, with the same money going in."}
           </p>
           {error && <ErrorNote text={error} />}
           <div className="flex gap-2">

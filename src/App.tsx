@@ -252,7 +252,8 @@ function SignedIn({ account }: { account: Account }) {
     );
   }
 
-  const mixesBySlot = [1, 2, 3].map((slot) => {
+  const lastSlot = Math.max(3, ...set.columns.map((c) => c.slot));
+  const mixesBySlot = Array.from({ length: lastSlot }, (_, i) => i + 1).map((slot) => {
     const c = set.columns.find((x) => x.slot === slot);
     const s = c ? states.get(c.portfolio.id) : undefined;
     return s?.currentWeights ?? c?.portfolio.tx.find((t) => t.kind === "rebalance")?.weights;

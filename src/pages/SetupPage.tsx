@@ -18,7 +18,8 @@ type Props = {
   onCreated: () => void;
 };
 
-const SLOTS = [1, 2, 3] as const;
+/** Most portfolios one comparison can hold. */
+export const MAX_PORTFOLIOS = 10;
 
 export default function SetupPage({ info, lookup, suggestions, initial, onCancel, onCreated }: Props) {
   const today = nyDate();
@@ -27,6 +28,12 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
   const [weekly, setWeekly] = useState(initial ? String(initial.weekly) : "100");
   const [mode, setMode] = useState<"today" | "past">(initial?.startDate && initial.startDate < today ? "past" : "today");
   const [pastDate, setPastDate] = useState(initial?.startDate && initial.startDate < today ? initial.startDate : "");
+  // Three to start with; when re-running a comparison, as many as it had (up to 10).
+  const SLOTS = useMemo(
+    () => Array.from({ length: Math.min(MAX_PORTFOLIOS, Math.max(3, initial?.mixes?.length ?? 0)) }, (_, i) => i + 1),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
   const [cols, setCols] = useState<Row[][]>(() =>
     SLOTS.map((s, i) => {
       const m = initial?.mixes?.[i];
@@ -141,13 +148,14 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="micro">{initial ? "New comparison" : "Step 2 of 2"}</p>
-          <h1 className="figure mt-1 text-[28px] leading-tight tracking-tight">Choose up to three portfolios</h1>
+          <h1 className="figure mt-1 text-[28px] leading-tight tracking-tight">Choose your portfolios</h1>
           <p className="mt-1 text-[13px] text-muted">
             Each gets {money(initialNum)} to start{weeklyNum > 0 ? ` plus ${money(weeklyNum)} a week` : ""}.{" "}
             <button type="button" onClick={() => setStep("money")} className="underline underline-offset-2 hover:text-ink">
               Change amounts
             </button>
           </p>
+          <p className="mt-1 text-[13px] text-muted">You can add more later, up to {MAX_PORTFOLIOS} in all.</p>
         </div>
       </div>
 
