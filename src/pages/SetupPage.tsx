@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import MixEditor, { mixFromRows, rowsFromMix, type Row } from "@/components/MixEditor";
-import { createSet, type Mix, type TickerInfo } from "@/lib/api";
+import { createSet, type Limits, type Mix, type TickerInfo } from "@/lib/api";
+import UpgradeDialog, { type UpgradeReason } from "@/components/UpgradeDialog";
 import { humanDate, money } from "@/lib/ledger";
 import { nyDate } from "@/lib/market";
 
@@ -16,12 +17,15 @@ type Props = {
   /** Shown when there is a comparison to go back to. */
   onCancel?: () => void;
   onCreated: () => void;
+  /** What this account's plan allows. */
+  limits: Limits;
 };
 
 /** Most portfolios one comparison can hold. */
 export const MAX_PORTFOLIOS = 10;
 
-export default function SetupPage({ info, lookup, suggestions, initial, onCancel, onCreated }: Props) {
+export default function SetupPage({ info, lookup, suggestions, initial, onCancel, onCreated, limits }: Props) {
+  const [upgrade, setUpgrade] = useState<UpgradeReason | null>(null);
   const today = nyDate();
   const [step, setStep] = useState<"money" | "columns">(initial ? "columns" : "money");
   const [amount, setAmount] = useState(initial ? String(initial.amount) : "10000");
@@ -30,17 +34,19 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
   const [pastDate, setPastDate] = useState(initial?.startDate && initial.startDate < today ? initial.startDate : "");
   // Three to start with; when re-running a comparison, as many as it had (up to 10).
   const SLOTS = useMemo(
-    () => Array.from({ length: Math.min(MAX_PORTFOLIOS, Math.max(3, initial?.mixes?.length ?? 0)) }, (_, i) => i + 1),
+    () => Array.from({ length: Math.min(limits.maxPortfolios, Math.max(3, initial?.mixes?.length ?? 0)) }, (_, i) => i + 1),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
   const [cols, setCols] = useState<Row[][]>(() =>
     SLOTS.map((s, i) => {
+      if (s === 1 && limits.lockFirst) return [{ ticker: DEFAULT_FUND, pct: "100" }];
       const m = initial?.mixes?.[i];
       if (m) return rowsFromMix(m);
       return s === 1 ? [{ ticker: DEFAULT_FUND, pct: "100" }] : [{ ticker: "", pct: "100" }];
     }),
   );
+  const [touched, setTouched] = useState<Set<number>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -155,7 +161,9 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
               Change amounts
             </button>
           </p>
-          <p className="mt-1 text-[13px] text-muted">You can add more later, up to {MAX_PORTFOLIOS} in all.</p>
+          {limits.maxPortfolios > 3 && (
+            <p className="mt-1 text-[13px] text-muted">You can add more later, up to {limits.maxPortfolios} in all.</p>
+          )}
         </div>
       </div>
 
@@ -196,13 +204,22 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
               <h2 className="text-[14px] font-medium">Portfolio {slot}</h2>
               <span className="micro">{slot === 1 ? "the whole US market" : "your choice"}</span>
             </div>
-            {slot !== 1 && isBlank(cols[i]) && (
+            {/* Shown until the column is first touched, not on blankness: a ticker
+                is blank while its search runs, and the hint vanishing on blur
+                would move the buttons below it mid-click. */}
+            {slot !== 1 && !touched.has(slot) && isBlank(cols[i]) && (
               <p className="mb-2 text-[12px] text-muted">Add a fund or stock, or a mix of several. Leave blank to skip.</p>
             )}
             <MixEditor
+              locked={limits.lockFirst && slot === 1}
+              maxTickers={limits.maxTickers}
+              onLimit={limits.maxTickers < 8 ? () => setUpgrade("tickers") : undefined}
               idPrefix={`setup-${slot}`}
               rows={cols[i]}
-              onChange={(rows) => setCols((c) => c.map((r, k) => (k === i ? rows : r)))}
+              onChange={(rows) => {
+                setTouched((t) => (t.has(slot) ? t : new Set(t).add(slot)));
+                setCols((c) => c.map((r, k) => (k === i ? rows : r)));
+              }}
               info={info}
               lookup={lookup}
               suggestions={suggestions}
@@ -237,6 +254,7 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
           <span className="text-[11px] text-muted">Your current comparison is kept in your history, not deleted.</span>
         )}
       </div>
+      <UpgradeDialog reason={upgrade} onClose={() => setUpgrade(null)} />
     </div>
   );
 }

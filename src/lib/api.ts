@@ -128,8 +128,47 @@ export async function loadActiveSet(): Promise<ActiveSet | null> {
   };
 }
 
+/** A limit a paid account would lift (the server's "upgrade_required: …" errors). */
+export class UpgradeRequired extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UpgradeRequired";
+  }
+}
+
 function rpcError(e: { message?: string } | null): Error {
-  return new Error(e?.message || "That didn't save. Try again.");
+  const msg = e?.message || "That didn't save. Try again.";
+  if (msg.startsWith("upgrade_required:")) return new UpgradeRequired(msg.replace(/^upgrade_required:\s*/, ""));
+  return new Error(msg);
+}
+
+export type Plan = "free" | "paid" | "admin";
+
+/** What an account may do. Free accounts are limited; paid and admin aren't. */
+export type Limits = {
+  plan: Plan;
+  /** Most portfolios in a comparison. */
+  maxPortfolios: number;
+  /** Most tickers in one portfolio. */
+  maxTickers: number;
+  /** Portfolio 1 is always VTI and can't be changed. */
+  lockFirst: boolean;
+};
+
+export const APP_MAX_PORTFOLIOS = 10;
+export const APP_MAX_TICKERS = 8;
+
+export function limitsFor(plan: Plan): Limits {
+  return plan === "free"
+    ? { plan, maxPortfolios: 3, maxTickers: 3, lockFirst: true }
+    : { plan, maxPortfolios: APP_MAX_PORTFOLIOS, maxTickers: APP_MAX_TICKERS, lockFirst: false };
+}
+
+/** The signed-in account's plan; no row means free. */
+export async function loadPlan(): Promise<Plan> {
+  const { data, error } = await supabase.from("account_plans").select("plan").maybeSingle();
+  if (error) throw error;
+  return (data?.plan as Plan | undefined) ?? "free";
 }
 
 /**

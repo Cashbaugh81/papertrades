@@ -95,7 +95,11 @@ export default function TickerField({ value, onCommit, onPending, label, testId 
         onChange={(e) => {
           const t = e.target.value;
           setText(t);
-          if (t.trim().toUpperCase() !== value) onCommit(""); // what's typed isn't a chosen ticker yet
+          const upper = t.trim().toUpperCase();
+          if (upper !== value) onCommit(""); // what's typed isn't a chosen ticker yet
+          // Say "checking…" straight away, not after the search's pause, so a
+          // quick click on Save can't slip in before the ticker is set.
+          onPending(upper.length >= 2 && upper !== value);
         }}
         onFocus={() => hits.length && setOpen(true)}
         onBlur={leave}
