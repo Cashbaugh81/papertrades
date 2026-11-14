@@ -124,12 +124,6 @@ export default function DashboardPage(props: Props) {
             mixes={chartMixes}
           />
         </div>
-        <p className="mt-2 text-[12px] leading-relaxed text-muted">
-          <strong className="font-medium text-ink">Biggest drop</strong> is the worst fall from a high point along the way,
-          the number that decides whether you'd really have held on. Deposits are left out of it, so a weekly top-up never
-          hides a fall. <strong className="font-medium text-ink">Risk %</strong> is how much the value typically swings in
-          a year (its volatility): the higher it is, the bumpier the ride.
-        </p>
       </section>
 
       <DecisionLog set={set} states={states} onCancelTx={props.onCancelTx} />
@@ -218,8 +212,14 @@ function ColumnCard({
 
       <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-rule pt-3 text-[12px]">
         <Stat label="Cash invested" value={money(state.invested)} />
-        <Stat label="Biggest drop" value={waitingToStart ? "—" : pct(state.maxDrawdown)} tone={state.maxDrawdown < -0.0005 ? "loss" : undefined} />
-        <Stat label="Risk %" value={waitingToStart ? "—" : pct(state.volatility)} hint="How much the value typically swings in a year (volatility)" />
+        <Stat
+          label="Biggest drop"
+          value={waitingToStart ? "—" : pct(state.maxDrawdown)}
+          tone={state.maxDrawdown < -0.0005 ? "loss" : undefined}
+          hintAlign="right"
+          hint="The worst fall from a high point along the way: the number that decides whether you'd really have held on. Weekly deposits are left out, so they never hide a fall."
+        />
+        <Stat label="Risk %" value={waitingToStart ? "—" : pct(state.volatility)} hint="How much the value typically swings in a year (its volatility). The higher it is, the bumpier the ride." />
         {baseline ? (
           <Stat
             label="vs portfolio 1"
@@ -346,11 +346,53 @@ function EmptyColumn({ slot, set, info, lookup, suggestions, onAddColumn }: Prop
   );
 }
 
-function Stat({ label, value, tone, hint }: { label: string; value: string; tone?: "gain" | "loss"; hint?: string }) {
+function Stat({
+  label,
+  value,
+  tone,
+  hint,
+  hintAlign = "left",
+}: {
+  label: string;
+  value: string;
+  tone?: "gain" | "loss";
+  hint?: string;
+  /** Which edge the callout lines up with; "right" for labels in the right-hand column. */
+  hintAlign?: "left" | "right";
+}) {
+  const [open, setOpen] = useState(false);
   return (
     <div>
-      <dt className="text-muted" title={hint}>
-        {label}
+      <dt className="text-muted">
+        {hint ? (
+          // Explained in a callout on hover, focus or tap.
+          <span className="relative inline-block">
+            <button
+              type="button"
+              className="cursor-help underline decoration-dotted decoration-[#b9b0a1] underline-offset-[3px] hover:text-ink"
+              onMouseEnter={() => setOpen(true)}
+              onMouseLeave={() => setOpen(false)}
+              onFocus={() => setOpen(true)}
+              onBlur={() => setOpen(false)}
+              onClick={() => setOpen(true)} // a tap also fires hover, so only open; tapping elsewhere closes it
+              aria-expanded={open}
+              aria-describedby={open ? `hint-${label}` : undefined}
+            >
+              {label}
+            </button>
+            {open && (
+              <span
+                id={`hint-${label}`}
+                role="tooltip"
+                className={`absolute bottom-full ${hintAlign === "right" ? "right-0" : "left-0"} z-20 mb-1.5 block w-56 max-w-[calc(100vw-3rem)] rounded-sm border border-rule bg-surface p-2.5 text-[12px] leading-snug text-ink shadow-sm`}
+              >
+                {hint}
+              </span>
+            )}
+          </span>
+        ) : (
+          label
+        )}
       </dt>
       <dd className={`num ${tone === "gain" ? "text-gain" : tone === "loss" ? "text-loss" : "text-ink"}`}>{value}</dd>
     </div>

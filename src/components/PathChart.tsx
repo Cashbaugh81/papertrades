@@ -269,7 +269,7 @@ export default function PathChart({ states, baselineId, height = 300, colors, la
                 onMouseLeave={() => setLegendOpen((o) => (o === l.id ? null : o))}
                 onFocus={() => setLegendOpen(l.id)}
                 onBlur={() => setLegendOpen((o) => (o === l.id ? null : o))}
-                onClick={() => setLegendOpen((o) => (o === l.id ? null : l.id))}
+                onClick={() => setLegendOpen(l.id)} // a tap also fires hover, so only open; tapping elsewhere closes it
                 aria-expanded={open}
                 data-testid={`legend-${l.id}`}
               >

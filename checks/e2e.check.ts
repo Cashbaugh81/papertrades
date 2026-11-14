@@ -197,6 +197,12 @@ async function main() {
   await page.locator('[data-testid^="legend-"]').nth(1).hover();
   const tip = await page.locator('[role="tooltip"]').innerText().catch(() => "");
   check("hovering a legend entry lists its mix", /NVDA\s+50%/.test(tip) && /SMH\s+50%/.test(tip), tip.replace(/\s+/g, " "));
+  await page.mouse.move(0, 0);
+  check("the old explanation under the chart is gone", !(await page.getByText(/is the worst fall from a high point/).isVisible()));
+  await page.locator('[data-testid="col-1"] button:has-text("Risk %")').hover();
+  check("hovering Risk % explains it", /typically swings in a year/.test(await page.locator('[role="tooltip"]').innerText().catch(() => "")));
+  await page.locator('[data-testid="col-1"] button:has-text("Biggest drop")').hover();
+  check("hovering Biggest drop explains it", /worst fall from a high point/.test(await page.locator('[role="tooltip"]').innerText().catch(() => "")));
   await page.screenshot({ path: `${OUT}/3-legend-hover.png` , fullPage: true });
   await page.mouse.move(0, 0);
 
@@ -215,6 +221,11 @@ async function main() {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   check("no sideways scroll at 320px", overflow <= 1, `${overflow}px`);
   await page.screenshot({ path: `${OUT}/4-dashboard-320.png`, fullPage: true });
+  await page.mouse.move(0, 0);
+  await page.locator('[data-testid="col-1"] button:has-text("Biggest drop")').click(); // a mouse click fires hover too, like a phone tap
+  const tipOverflow = await page.evaluate(() => { const t = document.querySelector('[role="tooltip"]'); if (!t) return -1; const r = t.getBoundingClientRect(); return Math.max(0, r.right - innerWidth, -r.left); });
+  check("on a phone, tapping Biggest drop shows a callout that fits the screen", tipOverflow === 0, String(tipOverflow));
+  await page.screenshot({ path: `${OUT}/4-callout-320.png` });
   await page.setViewportSize({ width: 1280, height: 1000 });
 
   // ---- start over goes back to onboarding ---------------------------------------------
