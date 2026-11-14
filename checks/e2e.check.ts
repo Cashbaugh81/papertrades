@@ -135,6 +135,10 @@ async function main() {
   await page.fill('[data-testid="setup-2-ticker-0"]', "NVDA");
   await page.fill('[data-testid="setup-2-pct-0"]', "50");
   await page.click('[data-testid="setup-col-2"] button:has-text("Add another")');
+  check(
+    "adding a ticker splits the mix evenly",
+    (await page.inputValue('[data-testid="setup-2-pct-0"]')) === "50" && (await page.inputValue('[data-testid="setup-2-pct-1"]')) === "50",
+  );
   await page.fill('[data-testid="setup-2-ticker-1"]', "ZZZZQX");
   check("an unknown ticker is reported", await waitForText(page, /not found|no ticker called ZZZZQX/, 45_000));
   await page.fill('[data-testid="setup-2-ticker-1"]', "SMH");
@@ -160,16 +164,31 @@ async function main() {
   await page.click('button:has-text("Add portfolio")');
   check("portfolio 3 added", await waitForText(page, /QQQ 100%/, 20_000));
 
-  // ---- change a mix, then cancel it ------------------------------------------------
-  await page.click('[data-testid="col-2"] button:has-text("Change mix")');
-  await page.click('[data-testid="col-2"] button[aria-label="Remove ticker 2"]');
-  await page.fill('[data-testid="edit-2-pct-0"]', "100");
-  await page.fill('[data-testid="col-2"] input[placeholder^="Why?"]', "e2e: all in on one");
-  await page.click('button:has-text("Change at next close")');
-  check("the mix change is pending", await waitForText(page, /Moving to NVDA 100% at the next close/, 20_000));
-  check("the decision log records it with its note", await waitForText(page, /changed to\s+NVDA 100%[\s\S]*all in on one/, 10_000));
-  await page.click('[data-testid="col-2"] button:has-text("Cancel")');
-  check("cancelling removes it", await waitForNoText(page, /Moving to NVDA 100%/, 20_000));
+  // ---- replace a mix, finding tickers by name ------------------------------------------
+  await page.click('[data-testid="col-3"] button:has-text("Change mix")');
+  await page.fill('[data-testid="edit-3-ticker-0"]', "netflix");
+  check("typing a name offers its ticker", await page.locator('[data-testid="edit-3-ticker-0-hit-NFLX"]').waitFor({ timeout: 30_000 }).then(() => true, () => false));
+  await page.click('[data-testid="edit-3-ticker-0-hit-NFLX"]');
+  check("picking a match fills in the ticker", (await page.inputValue('[data-testid="edit-3-ticker-0"]')) === "NFLX");
+  await page.click('[data-testid="col-3"] button:has-text("Add another")');
+  await page.fill('[data-testid="edit-3-ticker-1"]', "walt disney");
+  await page.locator('[data-testid="edit-3-ticker-1-hit-DIS"]').waitFor({ timeout: 30_000 });
+  await page.click('[data-testid="edit-3-ticker-1-hit-DIS"]');
+  check(
+    "the second ticker splits the mix 50/50",
+    (await page.inputValue('[data-testid="edit-3-pct-0"]')) === "50" && (await page.inputValue('[data-testid="edit-3-pct-1"]')) === "50",
+  );
+  await page.fill('[data-testid="edit-3-pct-0"]', "70");
+  await waitForNoText(page, /checking…/, 45_000);
+  await page.click('[data-testid="col-3"] button:has-text("Replace mix")');
+  check("a mix that doesn't add to 100 is refused", await waitForText(page, /add up to 120%, not 100%/, 10_000));
+  await page.fill('[data-testid="edit-3-pct-0"]', "50");
+  await page.fill('[data-testid="col-3"] input[placeholder^="Why?"]', "e2e: streaming instead");
+  await page.click('[data-testid="col-3"] button:has-text("Replace mix")');
+  check("the portfolio restarts with the new mix", await waitForText(page, /DIS 50% · NFLX 50%/, 20_000));
+  check("no pending sell-and-buy is shown", (await page.getByText(/Moving to .* at the next close/).count()) === 0);
+  check("it starts at the same close as the others", await page.locator('[data-testid="col-3"]').getByText(/Waiting for the next market close/).isVisible());
+  check("the decision log notes what it replaced", await waitForText(page, /Replaced QQQ 100% on [A-Z][a-z]{2} \d{1,2}, \d{4}\. e2e: streaming instead/, 10_000));
 
   // ---- a past start date: a what-if ----------------------------------------------------
   await page.click('button:has-text("Change start date")');
@@ -186,7 +205,7 @@ async function main() {
   const v2 = await page.innerText('[data-testid="col-2-value"]');
   const n = (s: string) => Number(s.replace(/[^0-9]/g, ""));
   check("what-if columns have grown past what was put in (~$45k)", n(v1) > 45_000 && n(v2) > 45_000, `${v1} / ${v2}`);
-  check("all three portfolios carried over", /QQQ 100%/.test(await page.innerText('[data-testid="col-3-mix"]')));
+  check("all three portfolios carried over", /DIS 50% · NFLX 50%/.test(await page.innerText('[data-testid="col-3"]')));
   await page.screenshot({ path: `${OUT}/3-dashboard-whatif.png`, fullPage: true });
   check("cards say Cash invested", await page.getByText("Cash invested").first().isVisible());
   const worthBox = await page.locator('[data-testid="col-1-value"]').boundingBox();

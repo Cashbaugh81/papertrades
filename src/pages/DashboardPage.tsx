@@ -159,7 +159,7 @@ function ColumnCard({
   const spread = baseline && !waitingToStart ? state.returnOnInvested - baseline.returnOnInvested : undefined;
 
   async function save() {
-    const r = mixFromRows(rows, info);
+    const r = mixFromRows(rows, info, p.startDate); // the new mix replays from the start date
     if (!r.mix) return setError(r.problem ?? "Check the mix.");
     setBusy(true);
     setError(null);
@@ -261,12 +261,13 @@ function ColumnCard({
               className="w-full rounded-sm border border-rule bg-surface px-2.5 py-2 text-sm placeholder:text-muted/70"
             />
             <p className="text-[11px] leading-snug text-muted">
-              All of this portfolio's money moves into the new mix at the next market close, and weekly deposits follow it.
+              This portfolio restarts as if it had held the new mix since {humanDate(p.startDate)}, with the same
+              money going in. The old mix is noted in the decision log.
             </p>
             {error && <ErrorNote text={error} />}
             <div className="flex gap-2">
               <button onClick={save} disabled={busy} className="rounded-sm bg-accent px-3 py-1.5 text-[12px] font-medium text-paper disabled:opacity-50">
-                {busy ? "Saving…" : "Change at next close"}
+                {busy ? "Saving…" : "Replace mix"}
               </button>
               <button onClick={() => setEditing(false)} className="px-2 text-[12px] text-muted underline underline-offset-2">
                 Cancel
