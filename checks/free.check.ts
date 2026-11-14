@@ -15,7 +15,7 @@ const b = await chromium.launch({ executablePath: "/usr/bin/google-chrome", args
 const page = await b.newPage({ viewport: { width: 1280, height: 1000 } });
 const dialog = () => page.locator('[data-testid="upgrade-dialog"]');
 const closeDialog = async () => {
-  await page.click('[data-testid="upgrade-dialog"] button:has-text("Got it")');
+  await page.click('[data-testid="upgrade-dialog"] button[aria-label="Close"]');
   await dialog().waitFor({ state: "detached", timeout: 5_000 });
 };
 const settle = () => page.getByText("checking…").first().waitFor({ state: "detached", timeout: 45_000 }).catch(() => {});
@@ -61,7 +61,15 @@ check("a third portfolio is allowed", /3\s*of\s*3/i.test(await page.innerText("#
 
 await page.click('[data-testid="add-portfolio"]');
 check("+ for a fourth asks for a paid account", await dialog().isVisible() && /up to 3 portfolios/.test(await dialog().innerText()));
-check("…and focus is on its button", await page.evaluate(() => document.activeElement?.textContent === "Got it"));
+check("…and focus is on Join Waitlist", await page.evaluate(() => document.activeElement?.textContent === "Join Waitlist"));
+check("it shows the price and the three benefits", await (async () => {
+  const t = await dialog().innerText();
+  return /\$2\.99\s*\/\s*month/.test(t) && /Up to 10 portfolios/.test(t) && /Unlimited stock tickers/.test(t) && /Buy and sell order tracking/.test(t);
+})());
+check("the image loads", await page.locator('[data-testid="upgrade-dialog"] img').evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0));
+await page.screenshot({ path: "checks/out/upgrade-1280.png" });
+await page.click('[data-testid="upgrade-dialog"] button:has-text("Join Waitlist")');
+check("joining shows you're on the list", await page.locator('[data-testid="waitlist-joined"]').waitFor({ timeout: 10_000 }).then(() => true, () => false));
 await page.keyboard.press("Escape");
 await dialog().waitFor({ state: "detached", timeout: 5_000 });
 check("Escape closes it, and no portfolio 4 appears", (await page.locator('[data-testid="col-4-empty"], [data-testid="col-4"]').count()) === 0);
@@ -69,6 +77,13 @@ check("Escape closes it, and no portfolio 4 appears", (await page.locator('[data
 await page.click('[data-testid="col-2"] button:has-text("Change mix")');
 await page.click('[data-testid="col-2"] button:has-text("Add another")');
 check("changing a mix: a fourth ticker asks for a paid account", await dialog().isVisible());
+check("…and remembers you already joined", await page.locator('[data-testid="waitlist-joined"]').waitFor({ timeout: 10_000 }).then(() => true, () => false));
+await page.setViewportSize({ width: 375, height: 800 });
+await page.waitForTimeout(300);
+const fits = await dialog().evaluate((d) => { const r = d.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; });
+check("on a phone the window fits the screen", fits);
+await page.screenshot({ path: "checks/out/upgrade-375.png" });
+await page.setViewportSize({ width: 1280, height: 1000 });
 await closeDialog();
 
 await page.screenshot({ path: "checks/out/free-dashboard.png", fullPage: true });

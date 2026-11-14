@@ -22,6 +22,12 @@ export type Database = {
         Update: never;
         Relationships: [];
       };
+      waitlist: {
+        Row: { user_id: string; email: string; reason: string; created_at: string };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
       comparison_sets: {
         Row: {
           archived_at: string | null;
@@ -215,6 +221,10 @@ export type Database = {
       };
       add_column: {
         Args: { p_set: string; p_slot: number; p_name: string; p_weights: Json };
+        Returns: string;
+      };
+      join_waitlist: {
+        Args: { p_reason?: string };
         Returns: string;
       };
       replace_column: {
