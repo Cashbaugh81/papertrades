@@ -5,6 +5,7 @@ import PathChart, { SERIES_COLORS } from "@/components/PathChart";
 import { ErrorNote, MAX_PORTFOLIOS } from "@/pages/SetupPage";
 import type { ActiveSet, Column, Limits, Mix, TickerInfo } from "@/lib/api";
 import UpgradeDialog, { type UpgradeReason } from "@/components/UpgradeDialog";
+import { ordinal, rankTints, tintColors, type RankTint } from "@/lib/rankTint";
 import { humanDate, money, pct, signedPct } from "@/lib/ledger";
 import type { PortfolioState, Tx } from "@/lib/types";
 
@@ -42,6 +43,16 @@ export default function DashboardPage(props: Props) {
   // (empty ones as a prompt); later ones appear once filled or being added.
   const [adding, setAdding] = useState<{ slot: number; n: number } | null>(null);
   const [upgrade, setUpgrade] = useState<UpgradeReason | null>(null);
+  // Rank the portfolios that have started by return: greenest card is doing
+  // best, reddest worst. Before the first close they're all equal: no tints.
+  const tints = useMemo(() => {
+    const started = [...bySlot.values()].filter((c) => {
+      const st = states.get(c.portfolio.id);
+      const first = c.portfolio.tx.find((t) => t.kind === "rebalance");
+      return st && st.invested > 0 && !(first && st.pending.some((o) => o.txId === first.id));
+    });
+    return rankTints(started.map((c) => ({ key: c.slot, value: states.get(c.portfolio.id)!.returnOnInvested })));
+  }, [bySlot, states]);
   const limits = props.limits;
   const cardProps = { ...props, onUpgrade: setUpgrade };
   const freeSlots = Array.from({ length: MAX_PORTFOLIOS }, (_, i) => i + 1).filter((s) => !bySlot.has(s));
@@ -138,11 +149,16 @@ export default function DashboardPage(props: Props) {
             <Plus size={18} aria-hidden />
           </button>
         </div>
+        {tints.size > 0 && (
+          <p className="-mt-1 mb-3 text-[12px] text-muted" data-testid="tint-key">
+            Shaded by return: the greenest card is doing best, the reddest worst.
+          </p>
+        )}
         <div className="grid gap-4 md:grid-cols-3">
           {shownSlots.map((slot) => {
             const col = bySlot.get(slot);
             return col ? (
-              <ColumnCard key={slot} {...cardProps} column={col} state={states.get(col.portfolio.id)!} baseline={slot === 1 ? undefined : baseline} />
+              <ColumnCard key={slot} {...cardProps} tint={tints.get(slot)} column={col} state={states.get(col.portfolio.id)!} baseline={slot === 1 ? undefined : baseline} />
             ) : (
               <EmptyColumn
                 key={`${slot}-${adding?.slot === slot ? adding.n : 0}`}
@@ -193,7 +209,8 @@ function ColumnCard({
   onCancelTx,
   limits,
   onUpgrade,
-}: Props & { column: Column; state: PortfolioState; baseline?: PortfolioState }) {
+  tint,
+}: Props & { column: Column; state: PortfolioState; baseline?: PortfolioState; tint?: RankTint }) {
   const locked = limits.lockFirst && column.slot === 1;
   const [editing, setEditing] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
@@ -226,7 +243,12 @@ function ColumnCard({
   }
 
   return (
-    <section className="flex flex-col rounded-sm border border-rule bg-surface p-4" data-testid={`col-${column.slot}`}>
+    <section
+      className="flex flex-col rounded-sm border border-rule bg-surface p-4 transition-colors duration-300"
+      style={tint ? tintColors(tint.t) : undefined}
+      data-testid={`col-${column.slot}`}
+      data-rank={tint?.rank}
+    >
       <div className="flex items-baseline justify-between gap-2">
         <h2 className="flex min-w-0 items-center gap-2 text-[14px] font-medium" title={p.name}>
           <span
@@ -246,7 +268,14 @@ function ColumnCard({
       </div>
 
       <div className="mt-4">
-        <div className="micro">Worth now</div>
+        <div className="flex items-baseline justify-between gap-2">
+          <div className="micro">Worth now</div>
+          {tint && (
+            <div className="micro" data-testid={`col-${column.slot}-rank`}>
+              {tint.rank === 1 ? "Best" : tint.rank === tint.of ? "Worst" : ordinal(tint.rank)} of {tint.of}
+            </div>
+          )}
+        </div>
         <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
           <span className="figure text-[28px] leading-none tracking-tight" data-testid={`col-${column.slot}-value`}>
             {money(state.value)}
