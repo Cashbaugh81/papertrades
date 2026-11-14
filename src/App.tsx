@@ -11,6 +11,9 @@ import {
   addColumn,
   cancelTx,
   replaceColumn,
+  loadPlan,
+  limitsFor,
+  type Plan,
   fetchPrices,
   loadActiveSet,
   mergeBundles,
@@ -151,6 +154,16 @@ function SignedIn({ account }: { account: Account }) {
     setSet(await loadActiveSet());
   }, []);
 
+  // Free accounts have limits; paid and admin accounts don't. The server
+  // enforces them too, so this only shapes what's offered.
+  const [plan, setPlan] = useState<Plan | null>(null);
+  useEffect(() => {
+    loadPlan()
+      .then(setPlan)
+      .catch(() => setPlan("free"));
+  }, []);
+  const limits = useMemo(() => limitsFor(plan ?? "free"), [plan]);
+
   useEffect(() => {
     reload().catch((e) => setFatal(errText(e)));
   }, [reload]);
@@ -221,7 +234,7 @@ function SignedIn({ account }: { account: Account }) {
   // Don't show numbers worked out from too little history (e.g. just after
   // moving the start date back, before the older prices arrive).
   const covered = loadedFrom.current !== null && from >= loadedFrom.current;
-  if (set === undefined || !index || !covered) return <Splash text="Loading the ledger…" />;
+  if (set === undefined || !index || !covered || plan === null) return <Splash text="Loading the ledger…" />;
 
   const shell = (children: React.ReactNode) => (
     <Shell
@@ -239,6 +252,7 @@ function SignedIn({ account }: { account: Account }) {
     return shell(
       <SetupPage
         key={setup ? "again" : "first"}
+        limits={limits}
         info={info}
         lookup={lookup}
         suggestions={suggestions}
@@ -261,6 +275,7 @@ function SignedIn({ account }: { account: Account }) {
 
   return shell(
     <DashboardPage
+      limits={limits}
       set={set}
       states={states}
       info={info}

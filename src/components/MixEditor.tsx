@@ -78,10 +78,16 @@ type Props = {
   /** Tickers already loaded. (Kept for callers; search now offers matches by name.) */
   suggestions?: string[];
   idPrefix: string;
+  /** Most tickers this portfolio may hold on the account's plan (default: the app's 8). */
+  maxTickers?: number;
+  /** Called instead of adding a row when `maxTickers` is reached (shows the upgrade message). */
+  onLimit?: () => void;
+  /** Show the mix but don't allow changes (a free account's portfolio 1). */
+  locked?: boolean;
 };
 
 /** Rows of ticker + percentage. Unknown tickers are looked up as they're typed. */
-export default function MixEditor({ rows, onChange, info, lookup, idPrefix }: Props) {
+export default function MixEditor({ rows, onChange, info, lookup, idPrefix, maxTickers = MAX_ROWS, onLimit, locked = false }: Props) {
   const total = useMemo(() => rows.reduce((a, r) => a + (Number(r.pct) || 0), 0), [rows]);
   const [asked, setAsked] = useState<Set<string>>(() => new Set());
   // Rows whose search is still running.
@@ -113,6 +119,22 @@ export default function MixEditor({ rows, onChange, info, lookup, idPrefix }: Pr
   latestRows.current = rows;
   const set = (i: number, patch: Partial<Row>) =>
     onChange(latestRows.current.map((r, k) => (k === i ? { ...r, ...patch } : r)));
+
+  if (locked) {
+    return (
+      <div className="space-y-1.5" data-testid={`${idPrefix}-locked`}>
+        {rows.map((r) => (
+          <div key={r.ticker} className="flex items-center justify-between rounded-sm border border-rule bg-paper px-2.5 py-2 text-sm">
+            <span className="font-medium">{r.ticker}</span>
+            <span className="num text-muted">{r.pct}%</span>
+          </div>
+        ))}
+        <p className="text-[11px] leading-snug text-muted">
+          Portfolio 1 is always the whole US market, so every comparison has the same yardstick.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">
@@ -163,10 +185,12 @@ export default function MixEditor({ rows, onChange, info, lookup, idPrefix }: Pr
         );
       })}
       <div className="flex items-center justify-between pt-1 text-xs">
-        {rows.length < MAX_ROWS ? (
+        {rows.length < Math.min(MAX_ROWS, onLimit ? MAX_ROWS : maxTickers) ? (
           <button
             type="button"
-            onClick={() => onChange(spreadEvenly([...rows, { ticker: "", pct: "" }]))}
+            onClick={() =>
+              rows.length >= maxTickers ? onLimit?.() : onChange(spreadEvenly([...rows, { ticker: "", pct: "" }]))
+            }
             className="flex items-center gap-1 text-muted underline decoration-rule underline-offset-2 hover:text-ink"
           >
             <Plus size={12} /> Add another

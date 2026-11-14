@@ -16,6 +16,12 @@ export type Database = {
   };
   public: {
     Tables: {
+      account_plans: {
+        Row: { user_id: string; plan: "free" | "paid" | "admin"; updated_at: string };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
       comparison_sets: {
         Row: {
           archived_at: string | null;

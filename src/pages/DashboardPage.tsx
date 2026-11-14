@@ -3,7 +3,8 @@ import { History, Info, Plus } from "lucide-react";
 import MixEditor, { mixFromRows, rowsFromMix, type Row } from "@/components/MixEditor";
 import PathChart, { SERIES_COLORS } from "@/components/PathChart";
 import { ErrorNote, MAX_PORTFOLIOS } from "@/pages/SetupPage";
-import type { ActiveSet, Column, Mix, TickerInfo } from "@/lib/api";
+import type { ActiveSet, Column, Limits, Mix, TickerInfo } from "@/lib/api";
+import UpgradeDialog, { type UpgradeReason } from "@/components/UpgradeDialog";
 import { humanDate, money, pct, signedPct } from "@/lib/ledger";
 import type { PortfolioState, Tx } from "@/lib/types";
 
@@ -19,6 +20,10 @@ type Props = {
   onCancelTx: (txId: string) => void;
   onChangeDate: () => void;
   onStartOver: () => void;
+  /** What this account's plan allows. */
+  limits: Limits;
+  /** Show the paid-account message (set by DashboardPage for its cards). */
+  onUpgrade?: (reason: UpgradeReason) => void;
 };
 
 export function mixLabel(mix?: Mix): string {
@@ -36,6 +41,9 @@ export default function DashboardPage(props: Props) {
   // "+" opens an add card for the lowest free slot. Slots 1–3 always show
   // (empty ones as a prompt); later ones appear once filled or being added.
   const [adding, setAdding] = useState<{ slot: number; n: number } | null>(null);
+  const [upgrade, setUpgrade] = useState<UpgradeReason | null>(null);
+  const limits = props.limits;
+  const cardProps = { ...props, onUpgrade: setUpgrade };
   const freeSlots = Array.from({ length: MAX_PORTFOLIOS }, (_, i) => i + 1).filter((s) => !bySlot.has(s));
   const nextFree = freeSlots[0];
   const shownSlots = [...new Set([1, 2, 3, ...bySlot.keys(), ...(adding && !bySlot.has(adding.slot) ? [adding.slot] : [])])].sort(
@@ -111,15 +119,19 @@ export default function DashboardPage(props: Props) {
           <h2 id="portfolios-title" className="flex items-baseline gap-2 text-[15px] font-medium">
             Portfolios
             <span className="micro">
-              {bySlot.size} of {MAX_PORTFOLIOS}
+              {bySlot.size} of {limits.maxPortfolios}
             </span>
           </h2>
           <button
             type="button"
-            onClick={() => nextFree && setAdding({ slot: nextFree, n: (adding?.n ?? 0) + 1 })}
-            disabled={!nextFree}
+            onClick={() => {
+              // Past the plan's limit, explain the paid account instead of adding.
+              if (nextFree && nextFree <= limits.maxPortfolios) setAdding({ slot: nextFree, n: (adding?.n ?? 0) + 1 });
+              else if (limits.maxPortfolios < MAX_PORTFOLIOS) setUpgrade("portfolios");
+            }}
+            disabled={!nextFree && limits.maxPortfolios >= MAX_PORTFOLIOS}
             aria-label="Add a portfolio"
-            title={nextFree ? "Add a portfolio" : `You have the most allowed (${MAX_PORTFOLIOS})`}
+            title={nextFree || limits.maxPortfolios < MAX_PORTFOLIOS ? "Add a portfolio" : `You have the most allowed (${MAX_PORTFOLIOS})`}
             data-testid="add-portfolio"
             className="flex size-9 items-center justify-center rounded-sm border border-rule bg-surface text-ink hover:border-ink/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -130,11 +142,11 @@ export default function DashboardPage(props: Props) {
           {shownSlots.map((slot) => {
             const col = bySlot.get(slot);
             return col ? (
-              <ColumnCard key={slot} {...props} column={col} state={states.get(col.portfolio.id)!} baseline={slot === 1 ? undefined : baseline} />
+              <ColumnCard key={slot} {...cardProps} column={col} state={states.get(col.portfolio.id)!} baseline={slot === 1 ? undefined : baseline} />
             ) : (
               <EmptyColumn
                 key={`${slot}-${adding?.slot === slot ? adding.n : 0}`}
-                {...props}
+                {...cardProps}
                 slot={slot}
                 startOpen={adding?.slot === slot}
                 onClose={() => setAdding(null)}
@@ -143,6 +155,7 @@ export default function DashboardPage(props: Props) {
           })}
         </div>
       </section>
+      <UpgradeDialog reason={upgrade} onClose={() => setUpgrade(null)} />
 
       {/* ---- the paths -------------------------------------------------------- */}
       <section>
@@ -178,7 +191,10 @@ function ColumnCard({
   suggestions,
   onChangeMix,
   onCancelTx,
+  limits,
+  onUpgrade,
 }: Props & { column: Column; state: PortfolioState; baseline?: PortfolioState }) {
+  const locked = limits.lockFirst && column.slot === 1;
   const [editing, setEditing] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
   const [note, setNote] = useState("");
@@ -287,7 +303,16 @@ function ColumnCard({
         {editing ? (
           <div className="space-y-2 border-t border-rule pt-3">
             <div className="micro">New mix</div>
-            <MixEditor idPrefix={`edit-${column.slot}`} rows={rows} onChange={setRows} info={info} lookup={lookup} suggestions={suggestions} />
+            <MixEditor
+              idPrefix={`edit-${column.slot}`}
+              rows={rows}
+              onChange={setRows}
+              info={info}
+              lookup={lookup}
+              suggestions={suggestions}
+              maxTickers={limits.maxTickers}
+              onLimit={limits.maxTickers < 8 ? () => onUpgrade?.("tickers") : undefined}
+            />
             <input
               value={note}
               maxLength={280}
@@ -309,6 +334,10 @@ function ColumnCard({
               </button>
             </div>
           </div>
+        ) : locked ? (
+          <p className="text-[11px] leading-snug text-muted" data-testid={`col-${column.slot}-locked`}>
+            Portfolio 1 is always the whole US market, so every comparison has the same yardstick.
+          </p>
         ) : (
           <button
             onClick={() => {
@@ -336,6 +365,8 @@ function EmptyColumn({
   onAddColumn,
   startOpen = false,
   onClose,
+  limits,
+  onUpgrade,
 }: Props & { slot: number; startOpen?: boolean; onClose?: () => void }) {
   const [open, setOpenState] = useState(startOpen);
   const setOpen = (o: boolean) => {
@@ -367,7 +398,16 @@ function EmptyColumn({
       </div>
       {open ? (
         <div className="mt-3 space-y-2">
-          <MixEditor idPrefix={`add-${slot}`} rows={rows} onChange={setRows} info={info} lookup={lookup} suggestions={suggestions} />
+          <MixEditor
+            idPrefix={`add-${slot}`}
+            rows={rows}
+            onChange={setRows}
+            info={info}
+            lookup={lookup}
+            suggestions={suggestions}
+            maxTickers={limits.maxTickers}
+            onLimit={limits.maxTickers < 8 ? () => onUpgrade?.("tickers") : undefined}
+          />
           <p className="text-[11px] leading-snug text-muted">
             {set.whatIf
               ? `Replays from ${humanDate(set.startDate)} like the others.`
