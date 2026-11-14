@@ -73,8 +73,9 @@ async function main() {
   check("pause stops the replay", await page.getByText("Just after the COVID crash").isVisible());
   await page.click('[data-testid="moment-play"]');
   check("three portfolios with photos", (await page.locator('[data-testid="landing-col"] img').count()) === 3);
-  await page.waitForFunction(() => [...document.images].filter((i) => i.src.includes("/landing/")).every((i) => i.complete && i.naturalWidth > 0), null, { timeout: 15_000 }).catch(() => {});
-  check("photos load", await page.evaluate(() => [...document.images].filter((i) => i.src.includes("/landing/")).every((i) => i.naturalWidth > 0)));
+  await page.locator('[data-testid="landing-col"]').first().scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('[data-testid="landing-col"] img')].every((i) => i.complete && i.naturalWidth > 0), null, { timeout: 15_000 }).catch(() => {});
+  check("photos load", await page.evaluate(() => [...document.querySelectorAll<HTMLImageElement>('[data-testid="landing-col"] img')].every((i) => i.naturalWidth > 0)));
   await page.screenshot({ path: `${OUT}/0-landing-1280.png`, fullPage: true });
   await page.click('button:has-text("Oct 2022")');
   check("picking a moment changes the story", await waitForText(page, /The long slide/, 5_000));
@@ -187,6 +188,17 @@ async function main() {
   check("what-if columns have grown past what was put in (~$45k)", n(v1) > 45_000 && n(v2) > 45_000, `${v1} / ${v2}`);
   check("all three portfolios carried over", /QQQ 100%/.test(await page.innerText('[data-testid="col-3-mix"]')));
   await page.screenshot({ path: `${OUT}/3-dashboard-whatif.png`, fullPage: true });
+  check("cards say Cash invested", await page.getByText("Cash invested").first().isVisible());
+  const worthBox = await page.locator('[data-testid="col-1-value"]').boundingBox();
+  const gainBox = await page.locator('[data-testid="col-1-gain"]').boundingBox();
+  check("the gain sits next to the worth", !!worthBox && !!gainBox && gainBox.x > worthBox.x + worthBox.width - 1 && Math.abs(gainBox.y + gainBox.height - (worthBox.y + worthBox.height)) < 12);
+  const legend = await page.locator('[data-testid^="legend-"]').allInnerTexts();
+  check("the chart legend names portfolios by number", legend.length === 3 && legend.every((t, i) => t.includes(`Portfolio ${i + 1}`)), legend.join(" | "));
+  await page.locator('[data-testid^="legend-"]').nth(1).hover();
+  const tip = await page.locator('[role="tooltip"]').innerText().catch(() => "");
+  check("hovering a legend entry lists its mix", /NVDA\s+50%/.test(tip) && /SMH\s+50%/.test(tip), tip.replace(/\s+/g, " "));
+  await page.screenshot({ path: `${OUT}/3-legend-hover.png` , fullPage: true });
+  await page.mouse.move(0, 0);
 
   // ---- stored on the server ------------------------------------------------------------
   await page.reload();
