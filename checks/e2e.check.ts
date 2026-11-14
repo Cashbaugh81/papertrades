@@ -222,6 +222,19 @@ async function main() {
   check("what-if columns have grown past what was put in (~$45k)", n(v1) > 45_000 && n(v2) > 45_000, `${v1} / ${v2}`);
   check("all three portfolios carried over", /DIS 50% · NFLX 50%/.test(await page.innerText('[data-testid="col-3"]')));
   await page.screenshot({ path: `${OUT}/3-dashboard-whatif.png`, fullPage: true });
+  const cards = await page.evaluate(() =>
+    [1, 2, 3, 4].map((slot) => {
+      const el = document.querySelector<HTMLElement>(`[data-testid="col-${slot}"]`)!;
+      const value = Number(el.querySelector('[data-testid$="-value"]')!.textContent!.replace(/[^0-9.-]/g, ""));
+      const [r, g] = getComputedStyle(el).backgroundColor.match(/\d+/g)!.map(Number);
+      return { slot, value, rank: Number(el.dataset.rank), label: el.querySelector('[data-testid$="-rank"]')?.textContent ?? "", greenish: g - r };
+    }),
+  );
+  const best = [...cards].sort((a, b) => b.value - a.value)[0];
+  const worst = [...cards].sort((a, b) => a.value - b.value)[0];
+  check("the best portfolio ranks 1st, says so, and is the greenest card", best.rank === 1 && /best of 4/i.test(best.label) && best.greenish === Math.max(...cards.map((c) => c.greenish)), JSON.stringify(cards));
+  check("the worst ranks last and is the reddest card", worst.rank === 4 && /worst of 4/i.test(worst.label) && worst.greenish === Math.min(...cards.map((c) => c.greenish)) && worst.greenish < 0);
+  check("the shading is explained", await page.locator('[data-testid="tint-key"]').isVisible());
   check("cards say Cash invested", await page.getByText("Cash invested").first().isVisible());
   const worthBox = await page.locator('[data-testid="col-1-value"]').boundingBox();
   const gainBox = await page.locator('[data-testid="col-1-gain"]').boundingBox();
