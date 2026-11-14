@@ -3,11 +3,28 @@ import type { PortfolioState } from "@/lib/types";
 import { humanDate, money, shortDate } from "@/lib/ledger";
 
 /**
- * Bold, clearly separate line colours: blue, red, gold (a deep yellow, since a
- * bright yellow is too faint on white). Checked with the dataviz palette
- * validator: lightness, chroma, colour-blind separation and contrast all pass.
+ * One colour per portfolio slot (1–10). Slots 1–3 are Chris's bold blue, red
+ * and gold (a deep yellow, since bright yellow is too faint on white); 4–10
+ * were added on 14 Nov when the limit went to ten.
+ *
+ * Checked with the dataviz palette validator (light surface): every
+ * neighbouring pair passes colour-blind separation (worst ΔE 10.3) and the
+ * normal-vision floor (worst 21.7), all ten pass 3:1 contrast. No ten-colour
+ * set keeps *every* pair distinct, so hovering a legend entry highlights that
+ * portfolio's line and fades the rest, and cards and legend carry the number.
  */
-export const SERIES_COLORS = ["#1D4ED8", "#C8102E", "#B8860B"];
+export const SERIES_COLORS = [
+  "#1D4ED8", // 1 blue
+  "#C8102E", // 2 red
+  "#B8860B", // 3 gold
+  "#0369A1", // 4 ocean
+  "#EB6834", // 5 orange
+  "#0891B2", // 6 cyan
+  "#DB2777", // 7 pink
+  "#008300", // 8 green
+  "#9333EA", // 9 purple
+  "#B45309", // 10 rust
+];
 const STROKE = SERIES_COLORS;
 
 type Props = {
@@ -177,17 +194,22 @@ export default function PathChart({ states, baselineId, height = 300, colors, la
         <g clipPath="url(#chartReveal)">
           {band && <path d={band} fill="url(#bandFill)" />}
 
-          {lines.map((l) => (
-            <path
-              key={l.id}
-              d={l.path}
-              fill="none"
-              stroke={l.color}
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          ))}
+          {/* Hovering a legend entry brings its line forward and fades the rest. */}
+          {[...lines]
+            .sort((a, b) => Number(a.id === legendOpen) - Number(b.id === legendOpen))
+            .map((l) => (
+              <path
+                key={l.id}
+                d={l.path}
+                fill="none"
+                stroke={l.color}
+                strokeWidth={legendOpen === l.id ? 3 : 2}
+                strokeOpacity={legendOpen && legendOpen !== l.id ? 0.15 : 1}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{ transition: "stroke-opacity 150ms" }}
+              />
+            ))}
         </g>
 
         {xTicks.map((t, i) => (

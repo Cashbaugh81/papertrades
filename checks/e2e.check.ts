@@ -164,6 +164,20 @@ async function main() {
   await page.click('button:has-text("Add portfolio")');
   check("portfolio 3 added", await waitForText(page, /QQQ 100%/, 20_000));
 
+  // ---- "+" adds more portfolios (up to 10) ----------------------------------------------
+  check("the counter shows 3 of 10", /3\s*of\s*10/i.test(await page.innerText('#portfolios-title')));
+  await page.click('[data-testid="add-portfolio"]');
+  check("+ opens a new portfolio 4", await page.locator('[data-testid="col-4-empty"] [data-testid="add-4-ticker-0"]').isVisible());
+  await page.fill('[data-testid="add-4-ticker-0"]', "SPY");
+  await waitForNoText(page, /checking…/, 45_000);
+  await page.click('[data-testid="col-4-empty"] button:has-text("Add portfolio")');
+  check("portfolio 4 added", await page.locator('[data-testid="col-4"]').waitFor({ timeout: 20_000 }).then(() => true, () => false));
+  check("it starts at the same close as the others", await page.locator('[data-testid="col-4"]').getByText(/Waiting for the next market close/).isVisible());
+  check("the counter shows 4 of 10", /4\s*of\s*10/i.test(await page.innerText('#portfolios-title')));
+  await page.click('[data-testid="add-portfolio"]');
+  await page.locator('[data-testid="col-5-empty"] button:has-text("Cancel")').click();
+  check("cancelling an added portfolio removes the card", (await page.locator('[data-testid="col-5-empty"]').count()) === 0);
+
   // ---- replace a mix, finding tickers by name ------------------------------------------
   await page.click('[data-testid="col-3"] button:has-text("Change mix")');
   await page.fill('[data-testid="edit-3-ticker-0"]', "netflix");
@@ -193,6 +207,7 @@ async function main() {
   // ---- a past start date: a what-if ----------------------------------------------------
   await page.click('button:has-text("Change start date")');
   check("changing the date keeps the mixes", (await page.inputValue('[data-testid="setup-2-ticker-0"]')) === "NVDA");
+  check("all four portfolios come along to the setup page", (await page.inputValue('[data-testid="setup-4-ticker-0"]')) === "SPY");
   await page.locator('input[type="radio"]').nth(1).check();
   await page.fill('input[aria-label="Start date"]', "2001-01-02");
   check("a date before VTI existed is caught", await waitForText(page, /VTI only has prices from/, 20_000));
@@ -212,10 +227,12 @@ async function main() {
   const gainBox = await page.locator('[data-testid="col-1-gain"]').boundingBox();
   check("the gain sits next to the worth", !!worthBox && !!gainBox && gainBox.x > worthBox.x + worthBox.width - 1 && Math.abs(gainBox.y + gainBox.height - (worthBox.y + worthBox.height)) < 12);
   const legend = await page.locator('[data-testid^="legend-"]').allInnerTexts();
-  check("the chart legend names portfolios by number", legend.length === 3 && legend.every((t, i) => t.includes(`Portfolio ${i + 1}`)), legend.join(" | "));
+  check("the chart legend names portfolios by number", legend.length === 4 && legend.every((t, i) => t.includes(`Portfolio ${i + 1}`)), legend.join(" | "));
   await page.locator('[data-testid^="legend-"]').nth(1).hover();
   const tip = await page.locator('[role="tooltip"]').innerText().catch(() => "");
   check("hovering a legend entry lists its mix", /NVDA\s+50%/.test(tip) && /SMH\s+50%/.test(tip), tip.replace(/\s+/g, " "));
+  const opacities = await page.evaluate(() => [...document.querySelectorAll('svg[aria-label^="Portfolio value"] path[stroke-opacity]')].map((p) => p.getAttribute("stroke-opacity")));
+  check("hovering a legend entry fades the other lines", opacities.filter((o) => o === "0.15").length === 3 && opacities.filter((o) => o === "1").length === 1, opacities.join(","));
   await page.mouse.move(0, 0);
   check("the old explanation under the chart is gone", !(await page.getByText(/is the worst fall from a high point/).isVisible()));
   await page.locator('[data-testid="col-1"] button:has-text("Risk %")').hover();
