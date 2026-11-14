@@ -127,7 +127,8 @@ export default function DashboardPage(props: Props) {
         <p className="mt-2 text-[12px] leading-relaxed text-muted">
           <strong className="font-medium text-ink">Biggest drop</strong> is the worst fall from a high point along the way,
           the number that decides whether you'd really have held on. Deposits are left out of it, so a weekly top-up never
-          hides a fall.
+          hides a fall. <strong className="font-medium text-ink">Risk %</strong> is how much the value typically swings in
+          a year (its volatility): the higher it is, the bumpier the ride.
         </p>
       </section>
 
@@ -218,7 +219,7 @@ function ColumnCard({
       <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-rule pt-3 text-[12px]">
         <Stat label="Cash invested" value={money(state.invested)} />
         <Stat label="Biggest drop" value={waitingToStart ? "—" : pct(state.maxDrawdown)} tone={state.maxDrawdown < -0.0005 ? "loss" : undefined} />
-        <Stat label="Ups and downs" value={waitingToStart ? "—" : pct(state.volatility)} hint="yearly volatility" />
+        <Stat label="Risk %" value={waitingToStart ? "—" : pct(state.volatility)} hint="How much the value typically swings in a year (volatility)" />
         {baseline ? (
           <Stat
             label="vs portfolio 1"
