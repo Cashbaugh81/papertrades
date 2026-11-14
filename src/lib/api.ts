@@ -4,7 +4,6 @@
  * order times, no edits to filled rows); this module just speaks to them.
  */
 import { supabase } from "@/lib/supabase";
-import { nyDate } from "@/lib/market";
 import { rowToPortfolio, seriesToBundle, type SeriesRow } from "@/lib/rows";
 import type { Account, Portfolio, PriceBundle } from "@/lib/types";
 
@@ -158,14 +157,17 @@ export async function addColumn(setId: string, slot: number, weights: Mix, name 
   if (error) throw rpcError(error);
 }
 
-/** Move a column's money into a new mix at the next close. */
-export async function changeMix(portfolioId: string, weights: Mix, note?: string): Promise<void> {
-  const { error } = await supabase.from("transactions").insert({
-    portfolio_id: portfolioId,
-    kind: "rebalance",
-    weights,
-    note: note?.trim() || null,
-    trade_date: nyDate(), // replaced by the server
+/**
+ * Restart a column with a new mix, as if it had held that mix since its start
+ * date. Its earlier history is replaced; the decision log keeps a note of what
+ * it replaced.
+ */
+export async function replaceColumn(portfolioId: string, weights: Mix, name = "", note?: string): Promise<void> {
+  const { error } = await supabase.rpc("replace_column", {
+    p_portfolio: portfolioId,
+    p_weights: weights,
+    p_name: name,
+    p_note: note?.trim() ?? "",
   });
   if (error) throw rpcError(error);
 }
@@ -191,6 +193,15 @@ export type TickerInfo = {
   last_date: string | null;
   error: string | null;
 };
+
+export type SearchHit = { ticker: string; name: string; assetType: string };
+
+/** Tickers matching a ticker or a name ("netflix" → NFLX), best match first. */
+export async function searchTickers(query: string): Promise<SearchHit[]> {
+  const { data, error } = await supabase.functions.invoke<{ hits: SearchHit[] }>("search", { body: { query } });
+  if (error || !data) return [];
+  return data.hits ?? [];
+}
 
 export type PriceResult = { bundle: PriceBundle; info: Record<string, TickerInfo>; invalid: string[] };
 

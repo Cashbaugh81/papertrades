@@ -211,6 +211,10 @@ export type Database = {
         Args: { p_set: string; p_slot: number; p_name: string; p_weights: Json };
         Returns: string;
       };
+      replace_column: {
+        Args: { p_portfolio: string; p_weights: Json; p_name?: string; p_note?: string };
+        Returns: string;
+      };
       price_series: {
         Args: { p_tickers: string[]; p_from?: string };
         Returns: { ticker: string; dates: string[]; closes: number[] }[];

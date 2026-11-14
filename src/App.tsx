@@ -10,7 +10,7 @@ import { supabase } from "@/lib/supabase";
 import {
   addColumn,
   cancelTx,
-  changeMix,
+  replaceColumn,
   fetchPrices,
   loadActiveSet,
   mergeBundles,
@@ -180,7 +180,8 @@ function SignedIn({ account }: { account: Account }) {
       .catch((e) => {
         if (!alive) return;
         if (e instanceof SessionEnded) return endSession();
-        if (bundle) setNotice(errText(e));
+        // Without the wider history there's nothing right to show; otherwise keep the old prices up.
+        if (bundle && !widen) setNotice(errText(e));
         else setFatal(errText(e));
       });
     return () => {
@@ -217,7 +218,10 @@ function SignedIn({ account }: { account: Account }) {
 
   if (fatal)
     return <Splash text="Something didn't load" detail={`${fatal} Try reloading the page.`} onSignOut={() => void signOut()} />;
-  if (set === undefined || !index) return <Splash text="Loading the ledger…" />;
+  // Don't show numbers worked out from too little history (e.g. just after
+  // moving the start date back, before the older prices arrive).
+  const covered = loadedFrom.current !== null && from >= loadedFrom.current;
+  if (set === undefined || !index || !covered) return <Splash text="Loading the ledger…" />;
 
   const shell = (children: React.ReactNode) => (
     <Shell
@@ -263,7 +267,10 @@ function SignedIn({ account }: { account: Account }) {
       suggestions={suggestions}
       pricesThrough={index.lastDate}
       onChangeMix={async (pid, mix, note) => {
-        await changeMix(pid, mix, note);
+        // Portfolio 1 keeps its friendly name while it's still just VTI.
+        const col = set.columns.find((c) => c.portfolio.id === pid);
+        const isMarket = col?.slot === 1 && Object.keys(mix).length === 1 && mix[DEFAULT_FUND] === 1;
+        await replaceColumn(pid, mix, isMarket ? "Whole US market" : "", note);
         await reload();
       }}
       onAddColumn={async (slot, mix) => {

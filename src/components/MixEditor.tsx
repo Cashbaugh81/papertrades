@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import type { Mix, TickerInfo } from "@/lib/api";
 import { humanDate } from "@/lib/ledger";
+import TickerField from "@/components/TickerField";
 
 const TICKER_RE = /^[A-Z0-9][A-Z0-9.-]{0,11}$/;
 const MAX_ROWS = 8;
@@ -51,21 +52,48 @@ export function mixFromRows(
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/**
+ * Whole-number percentages split as evenly as possible, adding to exactly 100:
+ * 1 → 100; 2 → 50, 50; 3 → 34, 33, 33.
+ */
+export function evenSplit(n: number): string[] {
+  if (n <= 0) return [];
+  const base = Math.floor(100 / n);
+  const extra = 100 - base * n;
+  return Array.from({ length: n }, (_, i) => String(base + (i < extra ? 1 : 0)));
+}
+
+/** The same rows, with their percentages reset to an even split. */
+export function spreadEvenly(rows: Row[]): Row[] {
+  const pcts = evenSplit(rows.length);
+  return rows.map((r, i) => ({ ...r, pct: pcts[i] }));
+}
+
 type Props = {
   rows: Row[];
   onChange: (rows: Row[]) => void;
   info: Record<string, TickerInfo>;
   /** Load a ticker we haven't seen yet. */
   lookup: (ticker: string) => Promise<unknown>;
-  /** Tickers already loaded, offered as suggestions. */
-  suggestions: string[];
+  /** Tickers already loaded. (Kept for callers; search now offers matches by name.) */
+  suggestions?: string[];
   idPrefix: string;
 };
 
 /** Rows of ticker + percentage. Unknown tickers are looked up as they're typed. */
-export default function MixEditor({ rows, onChange, info, lookup, suggestions, idPrefix }: Props) {
+export default function MixEditor({ rows, onChange, info, lookup, idPrefix }: Props) {
   const total = useMemo(() => rows.reduce((a, r) => a + (Number(r.pct) || 0), 0), [rows]);
   const [asked, setAsked] = useState<Set<string>>(() => new Set());
+  // Rows whose search is still running.
+  const [searching, setSearching] = useState<Set<number>>(() => new Set());
+  const setRowSearching = (i: number, on: boolean) =>
+    setSearching((s) => {
+      if (s.has(i) === on) return s;
+      const n = new Set(s);
+      if (on) n.add(i);
+      else n.delete(i);
+      return n;
+    });
 
   // Look up any complete ticker we know nothing about, after a pause in typing.
   useEffect(() => {
@@ -80,27 +108,27 @@ export default function MixEditor({ rows, onChange, info, lookup, suggestions, i
     return () => window.clearTimeout(timer);
   }, [rows, info, asked, lookup]);
 
-  const set = (i: number, patch: Partial<Row>) => onChange(rows.map((r, k) => (k === i ? { ...r, ...patch } : r)));
+  // A search can finish after other edits, so always change the latest rows.
+  const latestRows = useRef(rows);
+  latestRows.current = rows;
+  const set = (i: number, patch: Partial<Row>) =>
+    onChange(latestRows.current.map((r, k) => (k === i ? { ...r, ...patch } : r)));
 
   return (
     <div className="space-y-2">
       {rows.map((r, i) => {
         const t = r.ticker.trim().toUpperCase();
-        const status = !t ? "" : !TICKER_RE.test(t) ? "not a ticker" : !info[t] ? "checking…" : info[t].status === "ok" ? "" : info[t].status === "not_found" ? "not found" : "unavailable";
+        const status = searching.has(i) ? "checking…" : !t ? "" : !TICKER_RE.test(t) ? "not a ticker" : !info[t] ? "checking…" : info[t].status === "ok" ? "" : info[t].status === "not_found" ? "not found" : "unavailable";
         return (
           <div key={i}>
             <div className="flex items-center gap-2">
-              <input
-                aria-label={`Ticker ${i + 1}`}
-                data-testid={`${idPrefix}-ticker-${i}`}
-                value={r.ticker}
-                list={`${idPrefix}-suggestions`}
-                placeholder="Ticker, e.g. QQQ"
-                autoCapitalize="characters"
-                autoComplete="off"
-                spellCheck={false}
-                onChange={(e) => set(i, { ticker: e.target.value.trim().toUpperCase() })}
-                className="min-w-0 flex-1 rounded-sm border border-rule bg-surface px-2.5 py-2 text-sm uppercase placeholder:normal-case placeholder:text-muted/70"
+              <TickerField
+                key={`${i}-${rows.length}`}
+                value={t}
+                onCommit={(ticker) => set(i, { ticker })}
+                onPending={(on) => setRowSearching(i, on)}
+                label={`Ticker ${i + 1}`}
+                testId={`${idPrefix}-ticker-${i}`}
               />
               <div className="relative w-[84px] shrink-0">
                 <input
@@ -119,7 +147,7 @@ export default function MixEditor({ rows, onChange, info, lookup, suggestions, i
               </div>
               <button
                 type="button"
-                onClick={() => onChange(rows.length > 1 ? rows.filter((_, k) => k !== i) : [{ ticker: "", pct: "100" }])}
+                onClick={() => onChange(rows.length > 1 ? spreadEvenly(rows.filter((_, k) => k !== i)) : [{ ticker: "", pct: "100" }])}
                 className="shrink-0 rounded-sm p-1.5 text-muted transition-colors hover:text-loss"
                 aria-label={`Remove ticker ${i + 1}`}
               >
@@ -134,16 +162,11 @@ export default function MixEditor({ rows, onChange, info, lookup, suggestions, i
           </div>
         );
       })}
-      <datalist id={`${idPrefix}-suggestions`}>
-        {suggestions.map((t) => (
-          <option key={t} value={t} />
-        ))}
-      </datalist>
       <div className="flex items-center justify-between pt-1 text-xs">
         {rows.length < MAX_ROWS ? (
           <button
             type="button"
-            onClick={() => onChange([...rows, { ticker: "", pct: String(Math.max(0, round2(100 - total))) }])}
+            onClick={() => onChange(spreadEvenly([...rows, { ticker: "", pct: "" }]))}
             className="flex items-center gap-1 text-muted underline decoration-rule underline-offset-2 hover:text-ink"
           >
             <Plus size={12} /> Add another
