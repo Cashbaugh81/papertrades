@@ -41,10 +41,25 @@ type Props = {
 
 type Hover = { x: number; i: number } | null;
 
-export default function PathChart({ states, baselineId, height = 300, colors, labels, mixes }: Props) {
+export default function PathChart({ states: allStates, baselineId, height = 300, colors, labels, mixes }: Props) {
   const [hover, setHover] = useState<Hover>(null);
   const [legendOpen, setLegendOpen] = useState<string | null>(null);
+  // Portfolios switched off by clicking their legend entry. The chart (and its
+  // scale) only covers the ones still on; at least one always stays on.
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+  const states = useMemo(() => allStates.filter((s) => !hidden.has(s.id)), [allStates, hidden]);
   const nameOf = (s: { id: string; name: string }) => labels?.[s.id] ?? s.name;
+  const colorOf = (id: string) =>
+    colors?.[id] ?? STROKE[Math.max(0, allStates.findIndex((s) => s.id === id)) % STROKE.length];
+  const toggle = (id: string) =>
+    setHidden((h) => {
+      const next = new Set(h);
+      if (next.has(id)) next.delete(id);
+      else if (allStates.length - next.size > 1) next.add(id);
+      return next;
+    });
+  // Only highlight a line that's showing.
+  const highlight = legendOpen && !hidden.has(legendOpen) ? legendOpen : null;
 
   const model = useMemo(() => {
     const dates = [...new Set(states.flatMap((s) => s.dates))].sort();
@@ -98,7 +113,7 @@ export default function PathChart({ states, baselineId, height = 300, colors, la
       const pts = idx
         .filter((i) => Number.isFinite(s[i]))
         .map((i) => `${x(i).toFixed(1)},${y(s[i]).toFixed(1)}`);
-      return { path: `M${pts.join("L")}`, color: colors?.[states[si].id] ?? STROKE[si % STROKE.length], name: nameOf(states[si]), id: states[si].id };
+      return { path: `M${pts.join("L")}`, color: colorOf(states[si].id), name: nameOf(states[si]), id: states[si].id };
     });
 
     // Band between the best and worst path: the spread is the product's subject.
@@ -196,15 +211,15 @@ export default function PathChart({ states, baselineId, height = 300, colors, la
 
           {/* Hovering a legend entry brings its line forward and fades the rest. */}
           {[...lines]
-            .sort((a, b) => Number(a.id === legendOpen) - Number(b.id === legendOpen))
+            .sort((a, b) => Number(a.id === highlight) - Number(b.id === highlight))
             .map((l) => (
               <path
                 key={l.id}
                 d={l.path}
                 fill="none"
                 stroke={l.color}
-                strokeWidth={legendOpen === l.id ? 3 : 2}
-                strokeOpacity={legendOpen && legendOpen !== l.id ? 0.15 : 1}
+                strokeWidth={highlight === l.id ? 3 : 2}
+                strokeOpacity={highlight && highlight !== l.id ? 0.15 : 1}
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 style={{ transition: "stroke-opacity 150ms" }}
@@ -243,7 +258,7 @@ export default function PathChart({ states, baselineId, height = 300, colors, la
                   cx={x(hoverI)}
                   cy={y(s[hoverI])}
                   r={3}
-                  fill={colors?.[states[si].id] ?? STROKE[si % STROKE.length]}
+                  fill={colorOf(states[si].id)}
                 />
               ) : null,
             )}
@@ -267,7 +282,7 @@ export default function PathChart({ states, baselineId, height = 300, colors, la
                 <span className="flex items-center gap-1.5 truncate text-muted">
                   <span
                     className="inline-block size-1.5 shrink-0 rounded-full"
-                    style={{ background: colors?.[states[si].id] ?? STROKE[si % STROKE.length] }}
+                    style={{ background: colorOf(states[si].id) }}
                   />
                   <span className="truncate">{nameOf(s)}</span>
                 </span>
@@ -279,23 +294,29 @@ export default function PathChart({ states, baselineId, height = 300, colors, la
       )}
 
       <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1">
-        {lines.map((l) => {
+        {allStates.map((st) => {
+          const l = { id: st.id, name: nameOf(st), color: colorOf(st.id) };
+          const off = hidden.has(l.id);
           const mix = Object.entries(mixes?.[l.id] ?? {}).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
           const open = legendOpen === l.id && mix.length > 0;
           return (
             <span key={l.id} className="relative">
               <button
                 type="button"
-                className="flex min-h-8 items-center gap-1.5 rounded-sm px-1.5 text-xs text-muted hover:bg-paper hover:text-ink"
+                className={`flex min-h-8 items-center gap-1.5 rounded-sm px-1.5 text-xs hover:bg-paper hover:text-ink ${off ? "text-muted/60 line-through" : "text-muted"}`}
                 onMouseEnter={() => setLegendOpen(l.id)}
                 onMouseLeave={() => setLegendOpen((o) => (o === l.id ? null : o))}
                 onFocus={() => setLegendOpen(l.id)}
                 onBlur={() => setLegendOpen((o) => (o === l.id ? null : o))}
-                onClick={() => setLegendOpen(l.id)} // a tap also fires hover, so only open; tapping elsewhere closes it
-                aria-expanded={open}
+                onClick={() => toggle(l.id)}
+                aria-pressed={!off}
+                title={off ? "Show on the chart" : "Hide from the chart"}
                 data-testid={`legend-${l.id}`}
               >
-                <span className="inline-block h-[3px] w-5 rounded-full" style={{ background: l.color }} />
+                <span
+                  className="inline-block h-[3px] w-5 rounded-full"
+                  style={off ? { background: "transparent", boxShadow: `inset 0 0 0 1px ${l.color}` } : { background: l.color }}
+                />
                 {l.name}
                 {l.id === baselineId && <span className="text-[10px] text-accent">baseline</span>}
               </button>
