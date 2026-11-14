@@ -16,13 +16,15 @@ const prefersReducedMotion = () =>
 
 /**
  * Phone-only stand-in for the wide banner: three portraits that swipe
- * sideways and move on by themselves every 3 seconds. A swipe or a dot
- * restarts the wait.
+ * sideways and move on by themselves every 3 seconds. A swipe restarts the
+ * wait. No dots or pause button, at Chris's request: they're marketing
+ * images with nothing to read closely. People who ask their system for less
+ * motion get a still carousel they can swipe.
  */
 export default function PortraitCarousel({ className = "" }: { className?: string }) {
   const track = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState(0);
-  const [playing, setPlaying] = useState(() => !prefersReducedMotion());
+  const playing = !prefersReducedMotion();
 
   const go = useCallback((i: number) => {
     const el = track.current;
@@ -30,7 +32,7 @@ export default function PortraitCarousel({ className = "" }: { className?: strin
     el.scrollTo({ left: i * el.clientWidth, behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }, []);
 
-  // Keep the dots in step with swipes.
+  // Follow swipes, so the next automatic move starts from where they left it.
   const onScroll = () => {
     const el = track.current;
     if (!el || !el.clientWidth) return;
@@ -71,32 +73,6 @@ export default function PortraitCarousel({ className = "" }: { className?: strin
             />
           </div>
         ))}
-      </div>
-
-      <div className="mt-3 flex items-center justify-center gap-1">
-        {SLIDES.map((s, i) => (
-          <button
-            key={s.src}
-            type="button"
-            onClick={() => go(i)}
-            aria-label={`Show ${s.label}`}
-            aria-current={i === at}
-            className="flex h-11 w-8 items-center justify-center"
-          >
-            <span className={`block h-2 rounded-full transition-all ${i === at ? "w-5 bg-ink" : "w-2 bg-[#cfc6b6]"}`} />
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => setPlaying((p) => !p)}
-          aria-label={playing ? "Pause the slideshow" : "Play the slideshow"}
-          data-testid="carousel-play"
-          className="ml-1 flex h-11 w-11 items-center justify-center text-muted"
-        >
-          <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor" aria-hidden>
-            {playing ? <path d="M3 2h3v10H3zM8 2h3v10H8z" /> : <path d="M3.5 1.8v10.4L12 7z" />}
-          </svg>
-        </button>
       </div>
     </section>
   );
