@@ -16,12 +16,18 @@ type Props = {
   height?: number;
   /** Colour per series id. Lets a series keep its colour when another is missing. */
   colors?: Record<string, string>;
+  /** Name shown for each series id in the legend and tooltip (e.g. "Portfolio 2"). */
+  labels?: Record<string, string>;
+  /** Each series' current mix (ticker → weight 0–1), listed when its legend entry is hovered or tapped. */
+  mixes?: Record<string, Record<string, number> | undefined>;
 };
 
 type Hover = { x: number; i: number } | null;
 
-export default function PathChart({ states, baselineId, height = 300, colors }: Props) {
+export default function PathChart({ states, baselineId, height = 300, colors, labels, mixes }: Props) {
   const [hover, setHover] = useState<Hover>(null);
+  const [legendOpen, setLegendOpen] = useState<string | null>(null);
+  const nameOf = (s: { id: string; name: string }) => labels?.[s.id] ?? s.name;
 
   const model = useMemo(() => {
     const dates = [...new Set(states.flatMap((s) => s.dates))].sort();
@@ -75,7 +81,7 @@ export default function PathChart({ states, baselineId, height = 300, colors }: 
       const pts = idx
         .filter((i) => Number.isFinite(s[i]))
         .map((i) => `${x(i).toFixed(1)},${y(s[i]).toFixed(1)}`);
-      return { path: `M${pts.join("L")}`, color: colors?.[states[si].id] ?? STROKE[si % STROKE.length], name: states[si].name, id: states[si].id };
+      return { path: `M${pts.join("L")}`, color: colors?.[states[si].id] ?? STROKE[si % STROKE.length], name: nameOf(states[si]), id: states[si].id };
     });
 
     // Band between the best and worst path: the spread is the product's subject.
@@ -241,7 +247,7 @@ export default function PathChart({ states, baselineId, height = 300, colors }: 
                     className="inline-block size-1.5 shrink-0 rounded-full"
                     style={{ background: colors?.[states[si].id] ?? STROKE[si % STROKE.length] }}
                   />
-                  <span className="truncate">{s.name}</span>
+                  <span className="truncate">{nameOf(s)}</span>
                 </span>
                 <span className="num font-medium">{money(v)}</span>
               </div>
@@ -250,14 +256,44 @@ export default function PathChart({ states, baselineId, height = 300, colors }: 
         </div>
       )}
 
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-        {lines.map((l) => (
-          <span key={l.id} className="flex items-center gap-1.5 text-xs text-muted">
-            <span className="inline-block h-[3px] w-5 rounded-full" style={{ background: l.color }} />
-            {l.name}
-            {l.id === baselineId && <span className="text-[10px] text-accent">baseline</span>}
-          </span>
-        ))}
+      <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1">
+        {lines.map((l) => {
+          const mix = Object.entries(mixes?.[l.id] ?? {}).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+          const open = legendOpen === l.id && mix.length > 0;
+          return (
+            <span key={l.id} className="relative">
+              <button
+                type="button"
+                className="flex min-h-8 items-center gap-1.5 rounded-sm px-1.5 text-xs text-muted hover:bg-paper hover:text-ink"
+                onMouseEnter={() => setLegendOpen(l.id)}
+                onMouseLeave={() => setLegendOpen((o) => (o === l.id ? null : o))}
+                onFocus={() => setLegendOpen(l.id)}
+                onBlur={() => setLegendOpen((o) => (o === l.id ? null : o))}
+                onClick={() => setLegendOpen((o) => (o === l.id ? null : l.id))}
+                aria-expanded={open}
+                data-testid={`legend-${l.id}`}
+              >
+                <span className="inline-block h-[3px] w-5 rounded-full" style={{ background: l.color }} />
+                {l.name}
+                {l.id === baselineId && <span className="text-[10px] text-accent">baseline</span>}
+              </button>
+              {open && (
+                // What's in this portfolio, largest share first.
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute bottom-full left-0 z-20 mb-1 block min-w-40 rounded-sm border border-rule bg-surface p-2.5 text-xs shadow-sm"
+                >
+                  {mix.map(([t, w]) => (
+                    <span key={t} className="flex justify-between gap-4 py-0.5">
+                      <span className="font-medium text-ink">{t}</span>
+                      <span className="num text-muted">{Math.round(w * 1000) / 10}%</span>
+                    </span>
+                  ))}
+                </span>
+              )}
+            </span>
+          );
+        })}
       </div>
     </div>
   );

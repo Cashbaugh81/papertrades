@@ -39,6 +39,22 @@ export default function DashboardPage(props: Props) {
     () => Object.fromEntries(set.columns.map((c) => [c.portfolio.id, SERIES_COLORS[c.slot - 1]])),
     [set.columns],
   );
+  // The chart names portfolios by number (a mix's tickers don't fit); hovering shows what's in each.
+  const chartLabels = useMemo(
+    () => Object.fromEntries(set.columns.map((c) => [c.portfolio.id, `Portfolio ${c.slot}`])),
+    [set.columns],
+  );
+  const chartMixes = useMemo(
+    () =>
+      Object.fromEntries(
+        set.columns.map((c) => {
+          const st = states.get(c.portfolio.id);
+          const first = c.portfolio.tx.find((t) => t.kind === "rebalance");
+          return [c.portfolio.id, st?.currentWeights ?? first?.weights];
+        }),
+      ),
+    [set.columns, states],
+  );
 
   return (
     <div className="space-y-8">
@@ -100,7 +116,13 @@ export default function DashboardPage(props: Props) {
           <span className="micro">value of each portfolio over time</span>
         </div>
         <div className="rounded-sm border border-rule bg-surface p-4">
-          <PathChart states={chartStates} baselineId={baseline?.id} colors={colors} />
+          <PathChart
+            states={chartStates}
+            baselineId={baseline?.id}
+            colors={colors}
+            labels={chartLabels}
+            mixes={chartMixes}
+          />
         </div>
         <p className="mt-2 text-[12px] leading-relaxed text-muted">
           <strong className="font-medium text-ink">Biggest drop</strong> is the worst fall from a high point along the way,
@@ -179,17 +201,22 @@ function ColumnCard({
 
       <div className="mt-4">
         <div className="micro">Worth now</div>
-        <div className="figure mt-0.5 text-[28px] leading-none tracking-tight" data-testid={`col-${column.slot}-value`}>
-          {money(state.value)}
-        </div>
-        <div className={`num mt-1 text-[13px] ${state.profit >= 0 ? "text-gain" : "text-loss"}`}>
-          {state.profit >= 0 ? "+" : "−"}
-          {money(Math.abs(state.profit))} ({signedPct(state.returnOnInvested)})
+        <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+          <span className="figure text-[28px] leading-none tracking-tight" data-testid={`col-${column.slot}-value`}>
+            {money(state.value)}
+          </span>
+          <span
+            className={`text-[13px] [font-variant-numeric:tabular-nums] ${state.profit >= 0 ? "text-gain" : "text-loss"}`}
+            data-testid={`col-${column.slot}-gain`}
+          >
+            {state.profit >= 0 ? "+" : "−"}
+            {money(Math.abs(state.profit))} ({signedPct(state.returnOnInvested)})
+          </span>
         </div>
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-rule pt-3 text-[12px]">
-        <Stat label="Put in" value={money(state.invested)} />
+        <Stat label="Cash invested" value={money(state.invested)} />
         <Stat label="Biggest drop" value={waitingToStart ? "—" : pct(state.maxDrawdown)} tone={state.maxDrawdown < -0.0005 ? "loss" : undefined} />
         <Stat label="Ups and downs" value={waitingToStart ? "—" : pct(state.volatility)} hint="yearly volatility" />
         {baseline ? (
