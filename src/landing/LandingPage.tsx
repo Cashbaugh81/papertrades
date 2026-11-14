@@ -318,12 +318,12 @@ export default function LandingPage() {
                 style={{ ...serif, fontSize: "clamp(32px, 4vw, 48px)" }}
                 className="m-0 font-normal leading-[1.08] tracking-[-0.01em]"
               >
-                The ending isn't the hard part. The middle is.
+                Don't waste real money learning about the market.
               </h2>
               <p className="mt-5 text-[17px] leading-[1.6] text-[#3d3a36]">
-                Everyone wants the line that ends highest. Almost nobody asks what it took to stay on it. Ledger puts the
-                biggest fall right next to the result, so you find out what you can actually sit through while the money
-                is still pretend.
+                We all want the biggest return for our investments, but sometimes we wonder if we are making the right
+                choices. Now you can test multiple stock buys against each other. Invest the same $500 into different
+                stocks and see which one performs best.
               </p>
             </div>
             <div className="flex min-w-0 flex-[1_1_520px] flex-wrap gap-4">
@@ -359,14 +359,14 @@ export default function LandingPage() {
             </h2>
             <ol className="mt-9 flex list-none flex-wrap gap-8 p-0">
               {[
-                ["Say what you'd invest", "A starting amount and what you'd add each week. Real numbers, pretend money."],
+                ["Tell us your investment amounts", "A starting amount and what you'd add each week. Real numbers, pretend money."],
                 [
-                  "Pick up to three paths",
-                  "The whole US market is filled in for you. Add the fund, the stock, or the mix you've been tempted by.",
+                  "Pick multiple investment portfolios for the same money",
+                  "The whole market is filled in for you. Add the fund, the stock, or the mix you've been tempted by.",
                 ],
                 [
-                  "Start today, check in after the close",
-                  "Your money goes in at the next market close, at prices nobody knew yet. Then you live with it, week by week, and keep notes on why you changed course.",
+                  "Start with today or go back in time",
+                  "Start your portfolios today or move back in time and see where you'd be if you had invested years ago. Stocks get updated every trading day after close.",
                 ],
               ].map(([title, body], i) => (
                 <li key={title} className="min-w-0 flex-[1_1_280px]">
