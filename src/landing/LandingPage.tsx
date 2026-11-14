@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import PortraitCarousel from "@/landing/PortraitCarousel";
 import { COLUMNS, DEFAULT_MOMENT, ENDINGS, MOMENTS, MOODS, PHOTO_ALT, SERIES } from "@/landing/data";
 
 const BASE = import.meta.env.BASE_URL;
@@ -125,19 +126,23 @@ export default function LandingPage() {
           <Link
             to="/start"
             aria-label="Learn. Practice. Invest smarter. Start with pretend money"
-            className="mx-auto mt-10 block max-w-[2172px]"
+            className="mx-auto mt-10 hidden max-w-[2172px] sm:block"
             data-testid="landing-banner"
           >
             <img
               src={`${BASE}landing/banner-cropped-1280.webp`}
               srcSet={`${BASE}landing/banner-cropped-1280.webp 1280w, ${BASE}landing/banner-cropped-2172.webp 2172w`}
               sizes="100vw"
+              loading="lazy"
               width={2172}
               height={682}
               alt=""
               className="block h-auto w-full"
             />
           </Link>
+
+          {/* On phones the wide banner is too small to read, so show the portraits one at a time. */}
+          <PortraitCarousel className="mt-8 sm:hidden" />
 
           <div className="mx-auto mt-8 flex max-w-[1180px] flex-wrap items-center gap-5 px-6">
             <Link
