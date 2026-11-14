@@ -233,6 +233,20 @@ async function main() {
   check("hovering a legend entry lists its mix", /NVDA\s+50%/.test(tip) && /SMH\s+50%/.test(tip), tip.replace(/\s+/g, " "));
   const opacities = await page.evaluate(() => [...document.querySelectorAll('svg[aria-label^="Portfolio value"] path[stroke-opacity]')].map((p) => p.getAttribute("stroke-opacity")));
   check("hovering a legend entry fades the other lines", opacities.filter((o) => o === "0.15").length === 3 && opacities.filter((o) => o === "1").length === 1, opacities.join(","));
+
+  const lineCount = () => page.locator('svg[aria-label^="Portfolio value"] path[stroke-opacity]').count();
+  const yTop = async () => (await page.locator('svg[aria-label^="Portfolio value"] text').allTextContents()).filter((t) => t.startsWith("$")).join(" ");
+  const topBefore = await yTop();
+  await page.locator('[data-testid^="legend-"]').nth(1).click();
+  check("clicking a legend entry hides that line", (await lineCount()) === 3 && (await page.locator('[data-testid^="legend-"]').nth(1).getAttribute("aria-pressed")) === "false");
+  check("the scale fits the lines still showing", (await yTop()) !== topBefore, `${topBefore} → ${await yTop()}`);
+  await page.locator('[data-testid^="legend-"]').nth(1).click();
+  check("clicking it again brings it back", (await lineCount()) === 4);
+  for (const k of [0, 1, 2, 3]) await page.locator('[data-testid^="legend-"]').nth(k).click();
+  check("the last line showing can't be hidden", (await lineCount()) === 1);
+  for (const k of [0, 1, 2]) await page.locator('[data-testid^="legend-"]').nth(k).click();
+  check("all lines back", (await lineCount()) === 4);
+  await page.mouse.move(0, 0);
   await page.mouse.move(0, 0);
   check("the old explanation under the chart is gone", !(await page.getByText(/is the worst fall from a high point/).isVisible()));
   await page.locator('[data-testid="col-1"] button:has-text("Risk %")').hover();
