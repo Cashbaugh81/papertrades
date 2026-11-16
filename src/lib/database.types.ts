@@ -64,6 +64,7 @@ export type Database = {
       portfolios: {
         Row: {
           created_at: string;
+          custom_name: string | null;
           id: string;
           name: string;
           set_id: string;
@@ -74,6 +75,7 @@ export type Database = {
         };
         Insert: {
           created_at?: string;
+          custom_name?: string | null;
           id?: string;
           name: string;
           set_id: string;
@@ -84,6 +86,7 @@ export type Database = {
         };
         Update: {
           created_at?: string;
+          custom_name?: string | null;
           id?: string;
           name?: string;
           set_id?: string;

@@ -84,7 +84,12 @@ function friendlyAuthError(msg: string): string {
 // ---- comparison sets ----------------------------------------------------------
 
 /** A column of the active comparison: its slot (1-3) and engine portfolio. */
-export type Column = { slot: number; portfolio: Portfolio };
+export type Column = {
+  slot: number;
+  portfolio: Portfolio;
+  /** The name its owner chose; null shows "Portfolio N". */
+  customName: string | null;
+};
 
 export type ActiveSet = {
   id: string;
@@ -124,7 +129,7 @@ export async function loadActiveSet(): Promise<ActiveSet | null> {
     weekly: Number(set.weekly),
     whatIf: set.what_if,
     createdAt: set.created_at,
-    columns: (ps ?? []).map((p) => ({ slot: p.slot, portfolio: rowToPortfolio(p, set, ts ?? []) })),
+    columns: (ps ?? []).map((p) => ({ slot: p.slot, customName: p.custom_name ?? null, portfolio: rowToPortfolio(p, set, ts ?? []) })),
   };
 }
 
@@ -186,7 +191,7 @@ export async function createSet(input: {
   startDate: string;
   initial: number;
   weekly: number;
-  columns: { slot: number; weights: Mix; name?: string }[];
+  columns: { slot: number; weights: Mix; name?: string; customName?: string }[];
 }): Promise<void> {
   const { error } = await supabase.rpc("create_comparison_set", {
     p_start_date: input.startDate,
@@ -225,8 +230,10 @@ export async function cancelTx(txId: string): Promise<boolean> {
   return (data ?? []).length > 0;
 }
 
-export async function renameColumn(portfolioId: string, name: string): Promise<void> {
-  const { error } = await supabase.from("portfolios").update({ name: name.trim().slice(0, 80) }).eq("id", portfolioId);
+/** Name a portfolio; "" goes back to "Portfolio N". */
+export async function renamePortfolio(portfolioId: string, name: string): Promise<void> {
+  const custom = name.trim().slice(0, 40) || null;
+  const { error } = await supabase.from("portfolios").update({ custom_name: custom }).eq("id", portfolioId);
   if (error) throw rpcError(error);
 }
 

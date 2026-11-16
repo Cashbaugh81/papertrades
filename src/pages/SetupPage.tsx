@@ -3,6 +3,7 @@ import { AlertTriangle, Copy } from "lucide-react";
 import MixEditor, { mixFromRows, rowsFromMix, type Row } from "@/components/MixEditor";
 import { createSet, type Limits, type Mix, type TickerInfo } from "@/lib/api";
 import UpgradeDialog, { type UpgradeReason } from "@/components/UpgradeDialog";
+import PortfolioName from "@/components/PortfolioName";
 import { humanDate, money } from "@/lib/ledger";
 import { nyDate } from "@/lib/market";
 
@@ -13,7 +14,7 @@ type Props = {
   lookup: (ticker: string) => Promise<unknown>;
   suggestions: string[];
   /** Prefill when starting over or changing the date. */
-  initial?: { amount: number; weekly: number; startDate?: string; mixes?: (Mix | undefined)[] };
+  initial?: { amount: number; weekly: number; startDate?: string; mixes?: (Mix | undefined)[]; names?: (string | null)[] };
   /** Shown when there is a comparison to go back to. */
   onCancel?: () => void;
   onCreated: () => void;
@@ -45,6 +46,8 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
     }),
   );
   const SLOTS = cols.map((_, i) => i + 1);
+  // Names chosen for each portfolio ("" shows "Portfolio N"); kept when re-running a comparison.
+  const [names, setNames] = useState<string[]>(() => cols.map((_, i) => initial?.names?.[i] ?? ""));
   const [touched, setTouched] = useState<Set<number>>(() => new Set());
   // The portfolio a clone just landed in: scrolled to and briefly outlined.
   const [cloned, setCloned] = useState<{ slot: number; from: number } | null>(null);
@@ -86,6 +89,11 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
       next[target - 1] = rows;
       return next;
     });
+    setNames((n) => {
+      const next = [...n];
+      next[target - 1] = next[target - 1] ?? "";
+      return next;
+    });
     setTouched((t) => new Set(t).add(target));
     setCloned({ slot: target, from });
   }
@@ -119,7 +127,7 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
           const mix = checked[i]?.mix;
           if (!mix) return [];
           const isMarket = Object.keys(mix).length === 1 && mix[DEFAULT_FUND] === 1;
-          return [{ slot, weights: mix, name: isMarket ? "Whole US market" : undefined }];
+          return [{ slot, weights: mix, name: isMarket ? "Whole US market" : undefined, customName: names[i] || undefined }];
         }),
       });
       onCreated();
@@ -238,12 +246,16 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
             }`}
             data-testid={`setup-col-${slot}`}
           >
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="text-[14px] font-medium">Portfolio {slot}</h2>
-              <div className="flex items-center gap-2">
-                <span className="micro">
-                  {cloned?.slot === slot ? `copy of portfolio ${cloned.from}` : slot === 1 ? "the whole US market" : "your choice"}
-                </span>
+            <div className="mb-3">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="flex min-w-0 flex-1 text-[14px] font-medium">
+                  <PortfolioName
+                    slot={slot}
+                    customName={names[i]}
+                    onSave={(name) => setNames((n) => n.map((v, k) => (k === i ? name : v)))}
+                    testId={`setup-col-${slot}-name`}
+                  />
+                </h2>
                 {!isBlank(cols[i]) && roomForClone && (
                   <button
                     type="button"
@@ -251,12 +263,17 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
                     title="Copy this mix into a new portfolio, then adjust it"
                     aria-label={`Clone portfolio ${slot}`}
                     data-testid={`setup-col-${slot}-clone`}
-                    className="flex items-center gap-1 rounded-sm border border-rule px-2 py-1 text-[11px] text-muted hover:border-ink/30 hover:text-ink"
+                    className="flex shrink-0 items-center gap-1 rounded-sm border border-rule px-2 py-1 text-[11px] text-muted hover:border-ink/30 hover:text-ink"
                   >
                     <Copy size={12} aria-hidden /> Clone
                   </button>
                 )}
               </div>
+              {(cloned?.slot === slot || slot === 1) && (
+                <div className="micro mt-0.5">
+                  {cloned?.slot === slot ? `copy of portfolio ${cloned.from}` : "the whole US market"}
+                </div>
+              )}
             </div>
             {/* Shown until the column is first touched, not on blankness: a ticker
                 is blank while its search runs, and the hint vanishing on blur

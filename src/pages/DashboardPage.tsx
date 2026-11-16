@@ -5,6 +5,7 @@ import PathChart, { SERIES_COLORS } from "@/components/PathChart";
 import { ErrorNote, MAX_PORTFOLIOS } from "@/pages/SetupPage";
 import type { ActiveSet, Column, Limits, Mix, TickerInfo } from "@/lib/api";
 import UpgradeDialog, { type UpgradeReason } from "@/components/UpgradeDialog";
+import PortfolioName, { portfolioName } from "@/components/PortfolioName";
 import { ordinal, rankTints, tintColors, type RankTint } from "@/lib/rankTint";
 import { humanDate, money, pct, signedPct } from "@/lib/ledger";
 import type { PortfolioState, Tx } from "@/lib/types";
@@ -18,6 +19,8 @@ type Props = {
   pricesThrough: string;
   onChangeMix: (portfolioId: string, mix: Mix, note: string) => Promise<void>;
   onAddColumn: (slot: number, mix: Mix) => Promise<void>;
+  /** Name a portfolio ("" = back to "Portfolio N"). */
+  onRename: (portfolioId: string, name: string) => Promise<void>;
   onCancelTx: (txId: string) => void;
   onChangeDate: () => void;
   onStartOver: () => void;
@@ -83,7 +86,7 @@ export default function DashboardPage(props: Props) {
   );
   // The chart names portfolios by number (a mix's tickers don't fit); hovering shows what's in each.
   const chartLabels = useMemo(
-    () => Object.fromEntries(set.columns.map((c) => [c.portfolio.id, `Portfolio ${c.slot}`])),
+    () => Object.fromEntries(set.columns.map((c) => [c.portfolio.id, portfolioName(c.slot, c.customName)])),
     [set.columns],
   );
   const chartMixes = useMemo(
@@ -220,6 +223,7 @@ function ColumnCard({
   suggestions,
   onChangeMix,
   onCancelTx,
+  onRename,
   limits,
   onUpgrade,
   onClone,
@@ -264,20 +268,24 @@ function ColumnCard({
       data-rank={tint?.rank}
     >
       <div className="flex items-baseline justify-between gap-2">
-        <h2 className="flex min-w-0 items-center gap-2 text-[14px] font-medium" title={p.name}>
+        <h2 className="flex min-w-0 flex-1 items-center gap-2 text-[14px] font-medium">
           <span
             aria-hidden
             className="inline-block h-[3px] w-4 shrink-0 rounded-full"
             style={{ background: SERIES_COLORS[column.slot - 1] }}
           />
-          <span className="truncate">{p.name}</span>
+          <PortfolioName
+            slot={column.slot}
+            customName={column.customName}
+            onSave={(name) => onRename(p.id, name)}
+            testId={`col-${column.slot}-name`}
+          />
         </h2>
-        <span className="micro shrink-0">{column.slot === 1 ? "baseline" : `portfolio ${column.slot}`}</span>
+        <span className="micro shrink-0">
+          {column.slot === 1 ? "baseline" : column.customName ? `portfolio ${column.slot}` : ""}
+        </span>
       </div>
-      <div
-        className={`mt-0.5 text-[11px] text-muted ${p.name === mixLabel(mix) ? "sr-only" : ""}`}
-        data-testid={`col-${column.slot}-mix`}
-      >
+      <div className="mt-0.5 text-[11px] text-muted" data-testid={`col-${column.slot}-mix`}>
         {mixLabel(mix)}
       </div>
 
@@ -601,7 +609,7 @@ function DecisionLog({ set, states, onCancelTx }: { set: ActiveSet; states: Map<
             <li key={tx.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-3.5 py-2.5">
               <div className="min-w-0">
                 <span className="text-muted">{humanDate(tx.date)} · </span>
-                <span className="font-medium">{column.portfolio.name}</span>
+                <span className="font-medium">{portfolioName(column.slot, column.customName)}</span>
                 <span className="text-muted"> {first ? "started with" : "changed to"} </span>
                 <span>{mixLabel(tx.weights)}</span>
                 {tx.note && <div className="mt-0.5 text-[12px] text-muted">“{tx.note}”</div>}
