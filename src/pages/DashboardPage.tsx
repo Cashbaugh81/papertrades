@@ -438,10 +438,17 @@ function EmptyColumn({
   const [rows, setRows] = useState<Row[]>(initialRows ?? [{ ticker: "", pct: "100" }]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Opened by "+" or Clone: bring the card into view, since it may be further down.
+  // Opened by "+" or Clone: the card may be below the fold, so bring it to the
+  // middle of the screen, outline it for a moment, and put the cursor in it.
   const card = useRef<HTMLElement>(null);
+  const [flash, setFlash] = useState(startOpen);
   useEffect(() => {
-    if (startOpen) card.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (!startOpen || !card.current) return;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    card.current.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+    card.current.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+    const t = setTimeout(() => setFlash(false), 2500);
+    return () => clearTimeout(t);
   }, [startOpen]);
 
   async function save() {
@@ -458,7 +465,14 @@ function EmptyColumn({
   }
 
   return (
-    <section ref={card} className="flex flex-col rounded-sm border border-dashed border-rule p-4" data-testid={`col-${slot}-empty`}>
+    <section
+      ref={card}
+      className={`flex scroll-my-24 flex-col rounded-sm border border-dashed p-4 transition-[border-color,box-shadow] duration-500 ${
+        flash ? "border-accent shadow-[0_0_0_2px_rgb(31_77_61_/_0.15)]" : "border-rule"
+      }`}
+      data-testid={`col-${slot}-empty`}
+      data-flash={flash || undefined}
+    >
       <div className="flex items-baseline justify-between">
         <h2 className="text-[14px] font-medium text-muted">Portfolio {slot}</h2>
         <span className="micro">{open && copyOf ? `copy of portfolio ${copyOf}` : "empty"}</span>
