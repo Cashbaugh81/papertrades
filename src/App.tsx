@@ -11,6 +11,7 @@ import {
   addColumn,
   cancelTx,
   replaceColumn,
+  renamePortfolio,
   loadPlan,
   limitsFor,
   type Plan,
@@ -280,8 +281,14 @@ function SignedIn({ account }: { account: Account }) {
     return s?.currentWeights ?? c?.portfolio.tx.find((t) => t.kind === "rebalance")?.weights;
   });
 
+  const namesBySlot = mixesBySlot.map((_, i) => set.columns.find((x) => x.slot === i + 1)?.customName ?? null);
+
   return shell(
     <DashboardPage
+      onRename={async (pid, name) => {
+        await renamePortfolio(pid, name);
+        await reload();
+      }}
       limits={limits}
       onUpgraded={refreshPlan}
       set={set}
@@ -310,7 +317,7 @@ function SignedIn({ account }: { account: Account }) {
           .catch((e) => setNotice(errText(e)));
       }}
       onChangeDate={() =>
-        setSetup({ initial: { amount: set.initial, weekly: set.weekly, startDate: set.startDate, mixes: mixesBySlot } })
+        setSetup({ initial: { amount: set.initial, weekly: set.weekly, startDate: set.startDate, mixes: mixesBySlot, names: namesBySlot } })
       }
       onStartOver={() => setSetup({ initial: undefined })}
     />,
@@ -320,4 +327,4 @@ function SignedIn({ account }: { account: Account }) {
 /** Common funds offered as suggestions while typing a ticker. */
 const SUGGESTED = ["VTI", "VOO", "SPY", "QQQ", "DIA", "BND", "VXUS", "SCHD", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"];
 
-type SetupInitial = { amount: number; weekly: number; startDate?: string; mixes?: (Mix | undefined)[] };
+type SetupInitial = { amount: number; weekly: number; startDate?: string; mixes?: (Mix | undefined)[]; names?: (string | null)[] };
