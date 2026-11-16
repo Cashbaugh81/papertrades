@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { History, Info, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Copy, History, Info, Plus } from "lucide-react";
 import MixEditor, { mixFromRows, rowsFromMix, type Row } from "@/components/MixEditor";
 import PathChart, { SERIES_COLORS } from "@/components/PathChart";
 import { ErrorNote, MAX_PORTFOLIOS } from "@/pages/SetupPage";
@@ -25,6 +25,10 @@ type Props = {
   limits: Limits;
   /** Show the paid-account message (set by DashboardPage for its cards). */
   onUpgrade?: (reason: UpgradeReason) => void;
+  /** The account just became paid: re-read the plan. */
+  onUpgraded?: () => void;
+  /** Open a new portfolio holding this one's mix (set by DashboardPage for its cards). */
+  onClone?: (fromSlot: number, mix: Mix | undefined) => void;
 };
 
 export function mixLabel(mix?: Mix): string {
@@ -41,7 +45,8 @@ export default function DashboardPage(props: Props) {
   const baseline = bySlot.get(1) ? states.get(bySlot.get(1)!.portfolio.id) : undefined;
   // "+" opens an add card for the lowest free slot. Slots 1–3 always show
   // (empty ones as a prompt); later ones appear once filled or being added.
-  const [adding, setAdding] = useState<{ slot: number; n: number } | null>(null);
+  // A clone opens the same add card, filled with the copied mix.
+  const [adding, setAdding] = useState<{ slot: number; n: number; rows?: Row[]; from?: number } | null>(null);
   const [upgrade, setUpgrade] = useState<UpgradeReason | null>(null);
   // Rank the portfolios that have started by return: greenest card is doing
   // best, reddest worst. Before the first close they're all equal: no tints.
@@ -54,9 +59,19 @@ export default function DashboardPage(props: Props) {
     return rankTints(started.map((c) => ({ key: c.slot, value: states.get(c.portfolio.id)!.returnOnInvested })));
   }, [bySlot, states]);
   const limits = props.limits;
-  const cardProps = { ...props, onUpgrade: setUpgrade };
   const freeSlots = Array.from({ length: MAX_PORTFOLIOS }, (_, i) => i + 1).filter((s) => !bySlot.has(s));
   const nextFree = freeSlots[0];
+  const canAdd = !!nextFree && nextFree <= limits.maxPortfolios;
+  /** Open an add card (blank, or a copy of another portfolio); past the plan's limit, explain the paid account. */
+  function openAdd(copy?: { rows: Row[]; from: number }) {
+    if (canAdd) setAdding({ slot: nextFree, n: (adding?.n ?? 0) + 1, ...copy });
+    else if (limits.maxPortfolios < MAX_PORTFOLIOS) setUpgrade("portfolios");
+  }
+  const cardProps = {
+    ...props,
+    onUpgrade: setUpgrade,
+    onClone: (from: number, mix: Mix | undefined) => openAdd({ rows: rowsFromMix(mix), from }),
+  };
   const shownSlots = [...new Set([1, 2, 3, ...bySlot.keys(), ...(adding && !bySlot.has(adding.slot) ? [adding.slot] : [])])].sort(
     (a, b) => a - b,
   );
@@ -135,11 +150,7 @@ export default function DashboardPage(props: Props) {
           </h2>
           <button
             type="button"
-            onClick={() => {
-              // Past the plan's limit, explain the paid account instead of adding.
-              if (nextFree && nextFree <= limits.maxPortfolios) setAdding({ slot: nextFree, n: (adding?.n ?? 0) + 1 });
-              else if (limits.maxPortfolios < MAX_PORTFOLIOS) setUpgrade("portfolios");
-            }}
+            onClick={() => openAdd()}
             disabled={!nextFree && limits.maxPortfolios >= MAX_PORTFOLIOS}
             aria-label="Add a portfolio"
             title={nextFree || limits.maxPortfolios < MAX_PORTFOLIOS ? "Add a portfolio" : `You have the most allowed (${MAX_PORTFOLIOS})`}
@@ -165,13 +176,15 @@ export default function DashboardPage(props: Props) {
                 {...cardProps}
                 slot={slot}
                 startOpen={adding?.slot === slot}
+                initialRows={adding?.slot === slot ? adding.rows : undefined}
+                copyOf={adding?.slot === slot ? adding.from : undefined}
                 onClose={() => setAdding(null)}
               />
             );
           })}
         </div>
       </section>
-      <UpgradeDialog reason={upgrade} onClose={() => setUpgrade(null)} />
+      <UpgradeDialog reason={upgrade} onClose={() => setUpgrade(null)} onUpgraded={props.onUpgraded} />
 
       {/* ---- the paths -------------------------------------------------------- */}
       <section>
@@ -209,6 +222,7 @@ function ColumnCard({
   onCancelTx,
   limits,
   onUpgrade,
+  onClone,
   tint,
 }: Props & { column: Column; state: PortfolioState; baseline?: PortfolioState; tint?: RankTint }) {
   const locked = limits.lockFirst && column.slot === 1;
@@ -363,22 +377,39 @@ function ColumnCard({
               </button>
             </div>
           </div>
-        ) : locked ? (
-          <p className="text-[11px] leading-snug text-muted" data-testid={`col-${column.slot}-locked`}>
-            Portfolio 1 is always the whole US market, so every comparison has the same yardstick.
-          </p>
         ) : (
-          <button
-            onClick={() => {
-              setRows(rowsFromMix(pendingChange?.weights ?? mix));
-              setError(null);
-              setEditing(true);
-            }}
-            disabled={!!pendingChange}
-            className="w-full rounded-sm border border-rule px-3 py-1.5 text-[12px] text-muted hover:border-ink/30 hover:text-ink disabled:opacity-40"
-          >
-            Change mix
-          </button>
+          <div className="space-y-2">
+            {locked && (
+              <p className="text-[11px] leading-snug text-muted" data-testid={`col-${column.slot}-locked`}>
+                Portfolio 1 is always the whole US market, so every comparison has the same yardstick.
+              </p>
+            )}
+            <div className="flex gap-2">
+              {!locked && (
+                <button
+                  onClick={() => {
+                    setRows(rowsFromMix(pendingChange?.weights ?? mix));
+                    setError(null);
+                    setEditing(true);
+                  }}
+                  disabled={!!pendingChange}
+                  className="flex-1 rounded-sm border border-rule px-3 py-1.5 text-[12px] text-muted hover:border-ink/30 hover:text-ink disabled:opacity-40"
+                >
+                  Change mix
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => onClone?.(column.slot, pendingChange?.weights ?? mix)}
+                disabled={!mix}
+                title="Start a new portfolio with this mix, then adjust it"
+                data-testid={`col-${column.slot}-clone`}
+                className={`flex items-center justify-center gap-1.5 rounded-sm border border-rule px-3 py-1.5 text-[12px] text-muted hover:border-ink/30 hover:text-ink disabled:opacity-40 ${locked ? "flex-1" : ""}`}
+              >
+                <Copy size={13} aria-hidden /> Clone
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </section>
@@ -393,18 +424,25 @@ function EmptyColumn({
   suggestions,
   onAddColumn,
   startOpen = false,
+  initialRows,
+  copyOf,
   onClose,
   limits,
   onUpgrade,
-}: Props & { slot: number; startOpen?: boolean; onClose?: () => void }) {
+}: Props & { slot: number; startOpen?: boolean; initialRows?: Row[]; copyOf?: number; onClose?: () => void }) {
   const [open, setOpenState] = useState(startOpen);
   const setOpen = (o: boolean) => {
     setOpenState(o);
     if (!o) onClose?.();
   };
-  const [rows, setRows] = useState<Row[]>([{ ticker: "", pct: "100" }]);
+  const [rows, setRows] = useState<Row[]>(initialRows ?? [{ ticker: "", pct: "100" }]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Opened by "+" or Clone: bring the card into view, since it may be further down.
+  const card = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (startOpen) card.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [startOpen]);
 
   async function save() {
     const r = mixFromRows(rows, info, set.whatIf ? set.startDate : undefined);
@@ -420,10 +458,10 @@ function EmptyColumn({
   }
 
   return (
-    <section className="flex flex-col rounded-sm border border-dashed border-rule p-4" data-testid={`col-${slot}-empty`}>
+    <section ref={card} className="flex flex-col rounded-sm border border-dashed border-rule p-4" data-testid={`col-${slot}-empty`}>
       <div className="flex items-baseline justify-between">
         <h2 className="text-[14px] font-medium text-muted">Portfolio {slot}</h2>
-        <span className="micro">empty</span>
+        <span className="micro">{open && copyOf ? `copy of portfolio ${copyOf}` : "empty"}</span>
       </div>
       {open ? (
         <div className="mt-3 space-y-2">
@@ -437,6 +475,9 @@ function EmptyColumn({
             maxTickers={limits.maxTickers}
             onLimit={limits.maxTickers < 8 ? () => onUpgrade?.("tickers") : undefined}
           />
+          {copyOf && (
+            <p className="text-[11px] leading-snug text-muted">A copy of portfolio {copyOf}. Adjust it, then add it.</p>
+          )}
           <p className="text-[11px] leading-snug text-muted">
             {set.whatIf
               ? `Replays from ${humanDate(set.startDate)} like the others.`

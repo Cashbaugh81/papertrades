@@ -164,14 +164,7 @@ export function limitsFor(plan: Plan): Limits {
     : { plan, maxPortfolios: APP_MAX_PORTFOLIOS, maxTickers: APP_MAX_TICKERS, lockFirst: false };
 }
 
-/** When this account joined the paid-tier waitlist, or null. */
-export async function waitlistJoinedAt(): Promise<string | null> {
-  const { data, error } = await supabase.from("waitlist").select("created_at").maybeSingle();
-  if (error) throw error;
-  return (data?.created_at as string | undefined) ?? null;
-}
-
-/** Join the paid-tier waitlist (once; joining again changes nothing). */
+/** Join the Premium waitlist; this also makes the account paid (free of charge for now). */
 export async function joinWaitlist(reason: string): Promise<string> {
   const { data, error } = await supabase.rpc("join_waitlist", { p_reason: reason });
   if (error) throw rpcError(error);

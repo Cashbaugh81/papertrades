@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Copy } from "lucide-react";
 import MixEditor, { mixFromRows, rowsFromMix, type Row } from "@/components/MixEditor";
 import { createSet, type Limits, type Mix, type TickerInfo } from "@/lib/api";
 import UpgradeDialog, { type UpgradeReason } from "@/components/UpgradeDialog";
@@ -19,12 +19,14 @@ type Props = {
   onCreated: () => void;
   /** What this account's plan allows. */
   limits: Limits;
+  /** The account just became paid: re-read the plan. */
+  onUpgraded?: () => void;
 };
 
 /** Most portfolios one comparison can hold. */
 export const MAX_PORTFOLIOS = 10;
 
-export default function SetupPage({ info, lookup, suggestions, initial, onCancel, onCreated, limits }: Props) {
+export default function SetupPage({ info, lookup, suggestions, initial, onCancel, onCreated, limits, onUpgraded }: Props) {
   const [upgrade, setUpgrade] = useState<UpgradeReason | null>(null);
   const today = nyDate();
   const [step, setStep] = useState<"money" | "columns">(initial ? "columns" : "money");
@@ -32,21 +34,27 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
   const [weekly, setWeekly] = useState(initial ? String(initial.weekly) : "100");
   const [mode, setMode] = useState<"today" | "past">(initial?.startDate && initial.startDate < today ? "past" : "today");
   const [pastDate, setPastDate] = useState(initial?.startDate && initial.startDate < today ? initial.startDate : "");
-  // Three to start with; when re-running a comparison, as many as it had (up to 10).
-  const SLOTS = useMemo(
-    () => Array.from({ length: Math.min(limits.maxPortfolios, Math.max(3, initial?.mixes?.length ?? 0)) }, (_, i) => i + 1),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
+  // Three to start with; when re-running a comparison, as many as it had (up to
+  // the plan's limit). Cloning past the last one adds another.
   const [cols, setCols] = useState<Row[][]>(() =>
-    SLOTS.map((s, i) => {
+    Array.from({ length: Math.min(limits.maxPortfolios, Math.max(3, initial?.mixes?.length ?? 0)) }, (_, i) => i + 1).map((s, i) => {
       if (s === 1 && limits.lockFirst) return [{ ticker: DEFAULT_FUND, pct: "100" }];
       const m = initial?.mixes?.[i];
       if (m) return rowsFromMix(m);
       return s === 1 ? [{ ticker: DEFAULT_FUND, pct: "100" }] : [{ ticker: "", pct: "100" }];
     }),
   );
+  const SLOTS = cols.map((_, i) => i + 1);
   const [touched, setTouched] = useState<Set<number>>(() => new Set());
+  // The portfolio a clone just landed in: scrolled to and briefly outlined.
+  const [cloned, setCloned] = useState<{ slot: number; from: number } | null>(null);
+  const cards = useRef<(HTMLElement | null)[]>([]);
+  useEffect(() => {
+    if (!cloned) return;
+    cards.current[cloned.slot - 1]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const t = setTimeout(() => setCloned((c) => (c === cloned ? null : c)), 2500);
+    return () => clearTimeout(t);
+  }, [cloned]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -61,6 +69,27 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
         : null;
 
   const isBlank = (rows: Row[]) => rows.every((r) => !r.ticker.trim());
+
+  /** Copy a portfolio's mix into the first empty portfolio (or a new one), ready to adjust. */
+  function clone(from: number) {
+    const rows = cols[from - 1].map((r) => ({ ...r }));
+    let target = cols.findIndex((r, k) => k > 0 && k !== from - 1 && isBlank(r)) + 1;
+    if (!target) {
+      if (cols.length >= limits.maxPortfolios) {
+        if (limits.maxPortfolios < MAX_PORTFOLIOS) setUpgrade("portfolios");
+        return;
+      }
+      target = cols.length + 1;
+    }
+    setCols((c) => {
+      const next = [...c];
+      next[target - 1] = rows;
+      return next;
+    });
+    setTouched((t) => new Set(t).add(target));
+    setCloned({ slot: target, from });
+  }
+  const roomForClone = cols.some((r, k) => k > 0 && isBlank(r)) || cols.length < limits.maxPortfolios || limits.maxPortfolios < MAX_PORTFOLIOS;
   const checked = useMemo(
     () => cols.map((rows) => (isBlank(rows) ? null : mixFromRows(rows, info, mode === "past" ? startDate : undefined))),
     [cols, info, mode, startDate],
@@ -199,10 +228,35 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
 
       <div className="mt-5 grid gap-4 md:grid-cols-3">
         {SLOTS.map((slot, i) => (
-          <section key={slot} className="rounded-sm border border-rule bg-surface p-4" data-testid={`setup-col-${slot}`}>
-            <div className="mb-3 flex items-baseline justify-between">
+          <section
+            key={slot}
+            ref={(el) => {
+              cards.current[i] = el;
+            }}
+            className={`rounded-sm border bg-surface p-4 transition-[border-color,box-shadow] duration-500 ${
+              cloned?.slot === slot ? "border-accent shadow-[0_0_0_2px_rgb(31_77_61_/_0.15)]" : "border-rule"
+            }`}
+            data-testid={`setup-col-${slot}`}
+          >
+            <div className="mb-3 flex items-center justify-between gap-2">
               <h2 className="text-[14px] font-medium">Portfolio {slot}</h2>
-              <span className="micro">{slot === 1 ? "the whole US market" : "your choice"}</span>
+              <div className="flex items-center gap-2">
+                <span className="micro">
+                  {cloned?.slot === slot ? `copy of portfolio ${cloned.from}` : slot === 1 ? "the whole US market" : "your choice"}
+                </span>
+                {!isBlank(cols[i]) && roomForClone && (
+                  <button
+                    type="button"
+                    onClick={() => clone(slot)}
+                    title="Copy this mix into a new portfolio, then adjust it"
+                    aria-label={`Clone portfolio ${slot}`}
+                    data-testid={`setup-col-${slot}-clone`}
+                    className="flex items-center gap-1 rounded-sm border border-rule px-2 py-1 text-[11px] text-muted hover:border-ink/30 hover:text-ink"
+                  >
+                    <Copy size={12} aria-hidden /> Clone
+                  </button>
+                )}
+              </div>
             </div>
             {/* Shown until the column is first touched, not on blankness: a ticker
                 is blank while its search runs, and the hint vanishing on blur
@@ -254,7 +308,7 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
           <span className="text-[11px] text-muted">Your current comparison is kept in your history, not deleted.</span>
         )}
       </div>
-      <UpgradeDialog reason={upgrade} onClose={() => setUpgrade(null)} />
+      <UpgradeDialog reason={upgrade} onClose={() => setUpgrade(null)} onUpgraded={onUpgraded} />
     </div>
   );
 }

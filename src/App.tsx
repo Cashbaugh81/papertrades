@@ -163,6 +163,12 @@ function SignedIn({ account }: { account: Account }) {
       .catch(() => setPlan("free"));
   }, []);
   const limits = useMemo(() => limitsFor(plan ?? "free"), [plan]);
+  // "Join Waitlist" upgrades the account; read the plan again so limits lift at once.
+  const refreshPlan = useCallback(() => {
+    loadPlan()
+      .then(setPlan)
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     reload().catch((e) => setFatal(errText(e)));
@@ -253,6 +259,7 @@ function SignedIn({ account }: { account: Account }) {
       <SetupPage
         key={setup ? "again" : "first"}
         limits={limits}
+        onUpgraded={refreshPlan}
         info={info}
         lookup={lookup}
         suggestions={suggestions}
@@ -276,6 +283,7 @@ function SignedIn({ account }: { account: Account }) {
   return shell(
     <DashboardPage
       limits={limits}
+      onUpgraded={refreshPlan}
       set={set}
       states={states}
       info={info}

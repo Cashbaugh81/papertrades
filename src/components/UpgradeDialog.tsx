@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BarChart3, Check, Layers, Repeat, X } from "lucide-react";
-import { joinWaitlist, waitlistJoinedAt } from "@/lib/api";
+import { joinWaitlist } from "@/lib/api";
 
 export type UpgradeReason = "portfolios" | "tickers";
 
@@ -20,23 +20,36 @@ const FEATURES = [
 ];
 
 /**
- * The paid-tier offer a free account sees when it reaches a limit. The paid
- * tier isn't for sale yet, so the button joins a waitlist (public.waitlist).
+ * The Premium offer a free account sees when it reaches a limit. Nothing is
+ * for sale yet: "Join Waitlist" records the waitlist row and upgrades the
+ * account to paid on the spot (join_waitlist), free of charge.
  */
-export default function UpgradeDialog({ reason, onClose }: { reason: UpgradeReason | null; onClose: () => void }) {
+export default function UpgradeDialog({
+  reason,
+  onClose,
+  onUpgraded,
+}: {
+  reason: UpgradeReason | null;
+  onClose: () => void;
+  /** Called once the account is paid, so the page can lift its limits. */
+  onUpgraded?: () => void;
+}) {
   const cta = useRef<HTMLButtonElement>(null);
-  const [joined, setJoined] = useState<string | null | undefined>(undefined); // undefined = checking
+  const done = useRef<HTMLButtonElement>(null);
+  const [joined, setJoined] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Already on the list? Asked each time the window opens.
   useEffect(() => {
     if (!reason) return;
     setError(null);
-    waitlistJoinedAt()
-      .then(setJoined)
-      .catch(() => setJoined(null));
+    setJoined(false);
   }, [reason]);
+
+  // After upgrading, focus moves to the button that carries on.
+  useEffect(() => {
+    if (joined) done.current?.focus();
+  }, [joined]);
 
   useEffect(() => {
     if (!reason) return;
@@ -56,7 +69,9 @@ export default function UpgradeDialog({ reason, onClose }: { reason: UpgradeReas
     setBusy(true);
     setError(null);
     try {
-      setJoined(await joinWaitlist(reason!));
+      await joinWaitlist(reason!);
+      setJoined(true);
+      onUpgraded?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "That didn't save. Try again.");
     } finally {
@@ -123,12 +138,22 @@ export default function UpgradeDialog({ reason, onClose }: { reason: UpgradeReas
 
           <div className="mt-6 sm:mt-auto sm:pt-6">
             {joined ? (
-              <div role="status" className="rounded-sm bg-accent/10 px-3 py-2.5 text-[14px] text-accent" data-testid="waitlist-joined">
-                <span className="flex items-center gap-2 font-medium">
-                  <Check size={16} aria-hidden /> You're on the waitlist
-                </span>
-                <span className="mt-0.5 block text-[12px] text-muted">We'll let you know when Premium opens.</span>
-              </div>
+              <>
+                <div role="status" className="rounded-sm bg-accent/10 px-3 py-2.5 text-[14px] text-accent" data-testid="waitlist-joined">
+                  <span className="flex items-center gap-2 font-medium">
+                    <Check size={16} aria-hidden /> Congrats on your subscription
+                  </span>
+                  <span className="mt-0.5 block text-[12px] text-muted">Your account is now Premium. The limits are gone.</span>
+                </div>
+                <button
+                  ref={done}
+                  type="button"
+                  onClick={onClose}
+                  className="mt-3 min-h-11 w-full rounded-sm bg-accent px-4 text-[15px] font-semibold text-paper hover:bg-[#163a2e]"
+                >
+                  Continue
+                </button>
+              </>
             ) : (
               <button
                 ref={cta}
@@ -141,7 +166,7 @@ export default function UpgradeDialog({ reason, onClose }: { reason: UpgradeReas
               </button>
             )}
             {error && <p className="mt-2 text-[12px] text-loss">{error}</p>}
-            <p className="mt-3 text-[12px] text-muted">Premium isn't available yet. Joining is free and you won't be charged.</p>
+            <p className="mt-3 text-[12px] text-muted">Free during early access. You won't be charged.</p>
           </div>
         </div>
       </div>
