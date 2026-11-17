@@ -99,8 +99,13 @@ export default function LandingPage2() {
         </section>
 
         {/* ---- what $10,000 could have become (replaces the main page's replay) ---- */}
-        <div className="mt-6">
-          <WhatIfStories />
+        <div className="mt-10">
+          <div className="mx-auto max-w-[1180px] px-6 pb-6">
+            <h2 id="whatif-heading" style={{ ...serif, fontSize: "clamp(32px, 4vw, 44px)" }} className="m-0 font-normal">
+              What if I had…
+            </h2>
+          </div>
+          <WhatIfStories labelledBy="whatif-heading" />
         </div>
 
         <section id="numbers" aria-labelledby="point-title" className="mt-14 border-t border-rule">
