@@ -245,7 +245,7 @@ function ColumnCard({
   const spread = baseline && !waitingToStart ? state.returnOnInvested - baseline.returnOnInvested : undefined;
 
   async function save() {
-    const r = mixFromRows(rows, info, p.startDate); // the new mix replays from the start date
+    const r = mixFromRows(rows, info); // the new mix replays from the start date
     if (!r.mix) return setError(r.problem ?? "Check the mix.");
     setBusy(true);
     setError(null);
@@ -288,6 +288,11 @@ function ColumnCard({
       <div className="mt-0.5 text-[11px] text-muted" data-testid={`col-${column.slot}-mix`}>
         {mixLabel(mix)}
       </div>
+      {lateNotes(state).map((n) => (
+        <p key={n} className="m-0 mt-1 text-[11px] leading-snug text-flag" data-testid={`col-${column.slot}-listing`}>
+          {n}
+        </p>
+      ))}
 
       <div className="mt-4">
         <div className="flex items-baseline justify-between gap-2">
@@ -363,6 +368,7 @@ function ColumnCard({
               suggestions={suggestions}
               maxTickers={limits.maxTickers}
               onLimit={limits.maxTickers < 8 ? () => onUpgrade?.("tickers") : undefined}
+              startDate={p.startDate}
             />
             <input
               value={note}
@@ -460,7 +466,7 @@ function EmptyColumn({
   }, [startOpen]);
 
   async function save() {
-    const r = mixFromRows(rows, info, set.whatIf ? set.startDate : undefined);
+    const r = mixFromRows(rows, info);
     if (!r.mix) return setError(r.problem ?? "Check the mix.");
     setBusy(true);
     setError(null);
@@ -496,6 +502,7 @@ function EmptyColumn({
             suggestions={suggestions}
             maxTickers={limits.maxTickers}
             onLimit={limits.maxTickers < 8 ? () => onUpgrade?.("tickers") : undefined}
+            startDate={set.startDate}
           />
           {copyOf && (
             <p className="text-[11px] leading-snug text-muted">A copy of portfolio {copyOf}. Adjust it, then add it.</p>
@@ -625,7 +632,14 @@ function DecisionLog({ set, states, onCancelTx }: { set: ActiveSet; states: Map<
                     )}
                   </>
                 ) : fill ? (
-                  `invested ${money(fill.amount)} at the ${humanDate(fill.date)} close`
+                  <>
+                    invested {money(fill.amount)} at the {humanDate(fill.date)} close
+                    {fill.waited?.length ? (
+                      <span className="block text-flag" data-testid="decision-waited">
+                        {fill.waited.join(", ")} held as cash until {fill.waited.length > 1 ? "they" : "it"} started trading
+                      </span>
+                    ) : null}
+                  </>
                 ) : (
                   "—"
                 )}
@@ -636,4 +650,16 @@ function DecisionLog({ set, states, onCancelTx }: { set: ActiveSet; states: Map<
       </ul>
     </section>
   );
+}
+
+/**
+ * Notes for stocks that hadn't started trading when the money went in: their
+ * share was (or still is) held as cash until their first trading day.
+ */
+function lateNotes(state: PortfolioState): string[] {
+  const out = Object.entries(state.boughtIn ?? {})
+    .sort((a, b) => (a[1] < b[1] ? -1 : 1))
+    .map(([t, day]) => `${t}'s share was held as cash until it started trading on ${humanDate(day)}.`);
+  for (const t of Object.keys(state.waiting ?? {}).sort()) out.push(`${t}'s share is held as cash until it starts trading.`);
+  return out;
 }

@@ -171,6 +171,14 @@ function seriesToBundle(rows, source = "supabase") {
 }
 
 // src/lib/ledger.ts
+function listedBy(index, ticker, day) {
+  return closeOn(index, ticker, day) !== void 0;
+}
+function waitingTotal(book) {
+  let n = 0;
+  for (const v of book.waiting.values()) n += v;
+  return n;
+}
 function lowerBound(calendar, day) {
   let lo = 0;
   let hi = calendar.length;
@@ -206,7 +214,7 @@ function fillFor(index, tx, days) {
 function rebalanceDay(index, tx, days) {
   const tickers = Object.keys(tx.weights ?? {});
   if (tickers.length === 0) return void 0;
-  const allClose = (day) => tickers.every((t) => (index.close(t, day) ?? 0) > 0);
+  const allClose = (day) => tickers.every((t) => (index.close(t, day) ?? 0) > 0 || !listedBy(index, t, day));
   if (tx.placedAt) {
     const placed = Date.parse(tx.placedAt);
     if (!Number.isFinite(placed)) return void 0;
@@ -223,20 +231,23 @@ function rebalanceDay(index, tx, days) {
   return void 0;
 }
 function applyRebalance(index, book, tx, day) {
-  let total = book.cash;
+  let total = book.cash + waitingTotal(book);
   for (const [t, u] of book.units) {
     if (u <= 1e-12) continue;
     total += u * (closeOn(index, t, day) ?? 0);
   }
   book.units = /* @__PURE__ */ new Map();
+  book.waiting = /* @__PURE__ */ new Map();
   book.cash = 0;
   const weights = tx.weights ?? {};
   for (const [t, w] of Object.entries(weights)) {
     const px = index.close(t, day);
-    book.units.set(t, total * w / px);
+    if (px !== void 0 && px > 0) book.units.set(t, total * w / px);
+    else book.waiting.set(t, total * w);
   }
   book.weights = weights;
-  return { date: day, price: 0, units: 0, amount: total };
+  const waited = [...book.waiting.keys()].sort();
+  return { date: day, price: 0, units: 0, amount: total, ...waited.length ? { waited } : {} };
 }
 function applyOrder(book, tx, day, px) {
   if (tx.kind === "buy") {
@@ -273,13 +284,13 @@ function deployContribution(index, book, day, amount, weights) {
   for (const [ticker, w] of Object.entries(weights)) {
     if (!(w > 0)) continue;
     const px = closeOn(index, ticker, day);
-    if (!px) {
-      book.rejected.push(`contribution ${day}: no price for ${ticker}`);
-      continue;
-    }
     const spend = amount * w;
     if (spend > book.cash + 1e-6) continue;
     book.cash -= spend;
+    if (!px) {
+      book.waiting.set(ticker, (book.waiting.get(ticker) ?? 0) + spend);
+      continue;
+    }
     book.units.set(ticker, (book.units.get(ticker) ?? 0) + spend / px);
   }
 }
@@ -289,7 +300,8 @@ function eventKey(tx) {
 function computeState(index, p, endDate) {
   const start = p.startDate;
   const dates = index.calendar.filter((d) => d >= start && d <= endDate);
-  const book = { units: /* @__PURE__ */ new Map(), cash: 0, rejected: [], weights: p.weights };
+  const book = { units: /* @__PURE__ */ new Map(), cash: 0, rejected: [], weights: p.weights, waiting: /* @__PURE__ */ new Map() };
+  const boughtIn = {};
   const fills = {};
   const rejections = {};
   const pendingTx = [];
@@ -333,6 +345,13 @@ function computeState(index, p, endDate) {
   for (let i = 0; i < dates.length; i++) {
     const day = dates[i];
     let flow = 0;
+    for (const [t, amt] of book.waiting) {
+      const px = index.close(t, day);
+      if (px === void 0 || !(px > 0)) continue;
+      book.units.set(t, (book.units.get(t) ?? 0) + amt / px);
+      book.waiting.delete(t);
+      boughtIn[t] = day;
+    }
     if (i === 0) {
       if (p.initial > 0) {
         book.cash += p.initial;
@@ -374,7 +393,7 @@ function computeState(index, p, endDate) {
       const px = closeOn(index, ticker, day);
       if (px !== void 0) holdingsValue += units * px;
     }
-    values.push(holdingsValue + book.cash);
+    values.push(holdingsValue + book.cash + waitingTotal(book));
   }
   if (dates.length === 0) {
     if (p.initial > 0) {
@@ -410,7 +429,7 @@ function computeState(index, p, endDate) {
   const variance = rets.length > 1 ? rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1) : 0;
   const volatility = Math.sqrt(variance) * Math.sqrt(252);
   const finalDay = dates.length ? dates[dates.length - 1] : start;
-  const value = values.length ? values[values.length - 1] : book.cash;
+  const value = values.length ? values[values.length - 1] : book.cash + waitingTotal(book);
   const holdings = [];
   let totalHoldings = 0;
   for (const [ticker, units] of book.units) {
@@ -457,7 +476,9 @@ function computeState(index, p, endDate) {
     pending,
     fills,
     rejections,
-    currentWeights: book.weights
+    currentWeights: book.weights,
+    waiting: Object.fromEntries(book.waiting),
+    boughtIn
   };
 }
 
