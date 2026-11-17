@@ -21,7 +21,7 @@ const prefersReducedMotion = () =>
  * 10 seconds (not for people who ask for less motion), pauses while the pointer
  * or keyboard focus is inside, and can be swiped or picked by ticker.
  */
-export default function WhatIfStories() {
+export default function WhatIfStories({ labelledBy }: { labelledBy?: string } = {}) {
   const [at, setAt] = useState(0);
   const [pick, setPick] = useState(0); // bumped on every pick, to restart the wait
   const [auto] = useState(() => !prefersReducedMotion());
@@ -50,7 +50,8 @@ export default function WhatIfStories() {
   return (
     <section
       aria-roledescription="carousel"
-      aria-label="What $10,000 could have become"
+      aria-labelledby={labelledBy}
+      aria-label={labelledBy ? undefined : "What $10,000 could have become"}
       className="border-y border-rule bg-surface"
       data-testid="whatif"
       onMouseEnter={() => setHeld(true)}
@@ -134,13 +135,13 @@ export default function WhatIfStories() {
             aria-label={`${at + 1} of ${WHAT_IFS.length}`}
             aria-live={playing ? "off" : "polite"}
           >
-            <h2
+            <h3
               style={{ ...serif, fontSize: "clamp(26px, 2.6vw, 36px)" }}
               className="m-0 max-w-[720px] font-normal leading-[1.15]"
               data-testid="whatif-title"
             >
               {s.title}
-            </h2>
+            </h3>
             <p className="mb-0 mt-3 max-w-[640px] text-[16px] leading-[1.55] text-[#3d3a36]" data-testid="whatif-story">
               {s.story}
             </p>
