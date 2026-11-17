@@ -25,6 +25,6 @@ for (const [w, h, name] of [[1440, 900, "d"], [375, 812, "m"]] as const) {
 const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
 await p.goto(B);
 const t0 = await p.innerText('[data-testid="whatif-title"]');
-await p.waitForTimeout(7600);
+await p.waitForTimeout(10600);
 console.log("autoplay moved:", t0 !== (await p.innerText('[data-testid="whatif-title"]')));
 await b.close();

@@ -6,7 +6,7 @@ const BASE = import.meta.env.BASE_URL;
 const serif = { fontFamily: "Newsreader, Georgia, serif" } as const;
 
 /** How long each story stays up before the next one. */
-const STEP_MS = 7000;
+const STEP_MS = 10_000;
 
 const money = (n: number) => "$" + Math.round(n).toLocaleString("en-US");
 const pct = (n: number) => `${n >= 0 ? "+" : "−"}${Math.abs(Math.round(n)).toLocaleString("en-US")}%`;
@@ -18,7 +18,7 @@ const prefersReducedMotion = () =>
  * Four "what if you'd bought…" stories, one at a time: the portrait flush with
  * the left edge of the screen, and beside it the title, how it played out, and
  * a chart of the $10,000 from the day it went in to Nov 2, 2026. Moves on every
- * 7 seconds (not for people who ask for less motion), pauses while the pointer
+ * 10 seconds (not for people who ask for less motion), pauses while the pointer
  * or keyboard focus is inside, and can be swiped or picked by ticker.
  */
 export default function WhatIfStories() {
