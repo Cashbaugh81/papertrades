@@ -21,22 +21,39 @@ const prefersReducedMotion = () =>
  * 10 seconds (not for people who ask for less motion), pauses while the pointer
  * or keyboard focus is inside, and can be swiped or picked by ticker.
  */
+/** The last slide: the visitor, today, with three made-up futures. */
+const YOU = {
+  key: "you",
+  label: "You",
+  photo: "you",
+  alt: "An outline of a person labelled \"You\", sitting at a laptop",
+  focus: "50% 30%",
+};
+
+/** Every slide's pill and portrait: the four real stories, then "You". */
+const SLIDES = [
+  ...WHAT_IFS.map((w) => ({ key: w.key, label: w.ticker, photo: w.photo, alt: w.alt, focus: w.focus, title: w.title })),
+  { ...YOU, title: "What if you invest $10,000 today?" },
+];
+const COUNT = SLIDES.length;
+
 export default function WhatIfStories({ labelledBy }: { labelledBy?: string } = {}) {
   const [at, setAt] = useState(0);
   const [pick, setPick] = useState(0); // bumped on every pick, to restart the wait
   const [auto] = useState(() => !prefersReducedMotion());
   const [held, setHeld] = useState(false);
   const playing = auto && !held;
-  const s = WHAT_IFS[at];
+  const isYou = at === WHAT_IFS.length;
+  const s = WHAT_IFS[Math.min(at, WHAT_IFS.length - 1)];
 
   const go = (i: number) => {
-    setAt((i + WHAT_IFS.length) % WHAT_IFS.length);
+    setAt((i + COUNT) % COUNT);
     setPick((n) => n + 1);
   };
 
   useEffect(() => {
     if (!playing) return;
-    const t = window.setTimeout(() => setAt((i) => (i + 1) % WHAT_IFS.length), STEP_MS);
+    const t = window.setTimeout(() => setAt((i) => (i + 1) % COUNT), STEP_MS);
     return () => window.clearTimeout(t);
   }, [at, pick, playing]);
 
@@ -74,7 +91,7 @@ export default function WhatIfStories({ labelledBy }: { labelledBy?: string } = 
       <div className="grid md:grid-cols-[minmax(300px,36vw)_1fr]">
         {/* Portrait: flush with the left edge of the screen. */}
         <div className="relative aspect-[4/3] overflow-hidden bg-paper md:aspect-auto md:min-h-[620px]">
-          {WHAT_IFS.map((w, i) => (
+          {SLIDES.map((w, i) => (
             <img
               key={w.key}
               src={`${BASE}landing/whatif/${w.photo}-960.webp`}
@@ -96,21 +113,21 @@ export default function WhatIfStories({ labelledBy }: { labelledBy?: string } = 
 
         <div className="flex min-w-0 flex-col px-6 py-8 md:px-12 md:py-12 lg:px-16">
           <div className="mb-7 flex flex-wrap items-center gap-2" role="group" aria-label="Pick a story">
-            {WHAT_IFS.map((w, i) => {
+            {SLIDES.map((w, i) => {
               const on = i === at;
               return (
                 <button
                   key={w.key}
                   type="button"
                   aria-pressed={on}
-                  aria-label={`${w.ticker}: ${w.title}`}
+                  aria-label={`${w.label}: ${w.title}`}
                   onClick={() => go(i)}
                   className={`relative min-h-11 overflow-hidden rounded-full border px-4 text-[14px] font-medium transition-colors ${
                     on ? "border-ink bg-ink text-paper" : "border-[#d9cfbe] bg-surface text-ink hover:border-ink"
                   }`}
                   data-testid={`whatif-pick-${w.key}`}
                 >
-                  {w.ticker}
+                  {w.label}
                   {on && playing && (
                     <span
                       key={`${w.key}-${pick}`}
@@ -123,16 +140,28 @@ export default function WhatIfStories({ labelledBy }: { labelledBy?: string } = 
               );
             })}
             <span className="ml-1 hidden text-[13px] text-muted sm:inline" aria-hidden>
-              {at + 1} of {WHAT_IFS.length}
+              {at + 1} of {COUNT}
             </span>
           </div>
 
+          {isYou ? (
+            <div
+              key="you"
+              className="whatif-in flex flex-1 flex-col"
+              role="group"
+              aria-roledescription="slide"
+              aria-label={`${COUNT} of ${COUNT}`}
+              aria-live={playing ? "off" : "polite"}
+            >
+              <YouSlide />
+            </div>
+          ) : (
           <div
             key={s.key}
             className="whatif-in flex flex-1 flex-col"
             role="group"
             aria-roledescription="slide"
-            aria-label={`${at + 1} of ${WHAT_IFS.length}`}
+            aria-label={`${at + 1} of ${COUNT}`}
             aria-live={playing ? "off" : "polite"}
           >
             <h3
@@ -167,6 +196,7 @@ export default function WhatIfStories({ labelledBy }: { labelledBy?: string } = 
               </Link>
             </p>
           </div>
+          )}
         </div>
       </div>
     </section>
@@ -243,6 +273,187 @@ function Chart({ story, up }: { story: WhatIf; up: boolean }) {
         className="absolute right-0 size-3 -translate-y-1/2 translate-x-1/2 rounded-full border-2 border-white"
         style={{ top: `${endTop}%`, background: color }}
       />
+    </figure>
+  );
+}
+
+// ---- the "You" slide ----------------------------------------------------------------
+
+/**
+ * Three made-up futures for $10,000 put in today. They are an illustration of
+ * how differently the same money can go, not a forecast: each is a random
+ * wobble (fixed seed, so it looks the same every visit) pinned to an end value.
+ */
+const FUTURES = [
+  { key: "up-big", name: "Takes off", end: 31_000, wobble: 0.055, seed: 11, color: "#1b6b4a" },
+  { key: "steady", name: "Grows steadily", end: 14_000, wobble: 0.025, seed: 7, color: "#8a5a12" },
+  { key: "down", name: "Falls", end: 6_000, wobble: 0.04, seed: 3, color: "#a03a28" },
+] as const;
+
+const STEPS = 120;
+
+/** A small seeded random-number generator (mulberry32), so the paths never change. */
+function rng(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** A wobbly path from $10,000 to `end`: a random walk in log terms, bent to finish exactly at `end`. */
+function futurePath(end: number, wobble: number, seed: number): number[] {
+  const r = rng(seed);
+  const walk = [0];
+  for (let i = 1; i <= STEPS; i++) walk.push(walk[i - 1] + (r() + r() + r() - 1.5) * wobble);
+  const drift = Math.log(end / 10_000);
+  return walk.map((w, i) => {
+    const t = i / STEPS;
+    return 10_000 * Math.exp(drift * t + w - walk[STEPS] * t);
+  });
+}
+
+const PATHS = FUTURES.map((f) => ({ ...f, values: futurePath(f.end, f.wobble, f.seed) }));
+
+const TICKER_RE = /^[A-Z0-9][A-Z0-9.-]{0,11}$/;
+
+function YouSlide() {
+  const [raw, setRaw] = useState("");
+  const ticker = raw.trim().toUpperCase();
+  const valid = TICKER_RE.test(ticker);
+  const named = valid ? ticker : "it";
+
+  return (
+    <>
+      <h3
+        style={{ ...serif, fontSize: "clamp(26px, 2.6vw, 36px)" }}
+        className="m-0 max-w-[760px] font-normal leading-[1.25]"
+        data-testid="whatif-title"
+      >
+        What if I invest $10,000 today in{" "}
+        <label className="inline-block align-baseline">
+          <span className="sr-only">Stock ticker</span>
+          <input
+            value={raw}
+            onChange={(e) => setRaw(e.target.value.toUpperCase().slice(0, 12))}
+            placeholder="Enter Stock Ticker"
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={12}
+            size={raw ? Math.max(raw.length + 1, 4) : 14}
+            className="max-w-full border-0 border-b-2 border-dashed border-accent bg-transparent p-0 font-[inherit] text-accent placeholder:text-accent/50 focus:border-solid focus:outline-none"
+            style={{ fontSize: "inherit" }}
+            data-testid="whatif-ticker-input"
+          />
+        </label>
+        ?
+      </h3>
+      <p className="mb-0 mt-3 max-w-[640px] text-[16px] leading-[1.55] text-[#3d3a36]" data-testid="whatif-story">
+        Nobody knows which way {valid ? ticker : "a stock"} will go from here. Pick it today, follow it with pretend money,
+        and find out without risking a dollar.
+      </p>
+
+      <p className="mb-0 mt-7 text-[12px] uppercase tracking-[0.06em] text-muted">Three ways it could go</p>
+      <FutureChart ticker={valid ? ticker : undefined} />
+
+      <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3">
+        <Link
+          to="/start"
+          className="inline-flex min-h-12 items-center rounded-md bg-accent px-6 text-[15px] font-semibold text-paper no-underline hover:bg-[#163a2e]"
+          data-testid="whatif-you-cta"
+        >
+          {valid ? `Track ${ticker} with pretend money` : "Start with pretend money"}
+        </Link>
+      </div>
+
+      <p className="mb-0 mt-4 text-[12px] leading-[1.5] text-muted">
+        Illustration only: these three paths are made up to show how differently the same $10,000 can go. They aren't a
+        forecast for {named === "it" ? "any stock" : named}, and it isn't advice.
+      </p>
+    </>
+  );
+}
+
+/** Three made-up paths fanning out from "Today", with each one's end value. */
+function FutureChart({ ticker }: { ticker?: string }) {
+  const W = 640;
+  const H = 240;
+  const all = PATHS.flatMap((p) => p.values);
+  const lo = Math.min(...all);
+  const hi = Math.max(...all);
+  // Room on the left for "Today" and on the right for the end labels.
+  const fx = (i: number) => 0.17 + (i / STEPS) * 0.55;
+  const fy = (v: number) => 0.06 + (1 - (v - lo) / (hi - lo)) * 0.84;
+  const startTop = fy(10_000) * 100;
+
+  return (
+    <figure className="relative m-0 mt-3 h-[200px] md:h-[240px]" data-testid="whatif-future-chart">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`Three made-up futures for $10,000 invested today${ticker ? ` in ${ticker}` : ""}: ${PATHS.map(
+          (p) => `${p.name.toLowerCase()} to ${money(p.end)}`,
+        ).join(", ")}.`}
+        className="absolute inset-0 block h-full w-full overflow-visible"
+      >
+        <line x1="0" y1={H} x2={W} y2={H} stroke="#e4dcce" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        <line
+          x1={W * fx(0)}
+          y1={(startTop / 100) * H}
+          x2={W * fx(STEPS)}
+          y2={(startTop / 100) * H}
+          stroke="#b8ad9c"
+          strokeWidth="1"
+          strokeDasharray="4 4"
+          vectorEffect="non-scaling-stroke"
+        />
+        {PATHS.map((p) => (
+          <path
+            key={p.key}
+            d={p.values.map((v, i) => `${i ? "L" : "M"}${(fx(i) * W).toFixed(1)} ${(fy(v) * H).toFixed(1)}`).join(" ")}
+            fill="none"
+            stroke={p.color}
+            strokeWidth="2.25"
+            strokeDasharray="6 4"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+      </svg>
+
+      {/* "Today": where all three start. */}
+      <span
+        aria-hidden
+        className="absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-ink"
+        style={{ left: `${fx(0) * 100}%`, top: `${startTop}%` }}
+      />
+      <span
+        aria-hidden
+        className="absolute -translate-y-1/2 text-right text-[12px] leading-tight"
+        style={{ right: `${(1 - fx(0)) * 100 + 2.5}%`, top: `${startTop}%` }}
+      >
+        <strong className="block font-semibold text-ink">Today</strong>
+        <span className="text-muted">$10,000</span>
+      </span>
+
+      {/* Each path's end: a dot in its colour, then the value and name in ink. */}
+      {PATHS.map((p) => {
+        const top = fy(p.end) * 100;
+        return (
+          <span key={p.key} aria-hidden className="absolute flex -translate-y-1/2 items-center gap-2" style={{ left: `${fx(STEPS) * 100}%`, top: `${top}%` }}>
+            <span className="-ml-1.5 size-3 shrink-0 rounded-full border-2 border-white" style={{ background: p.color }} />
+            <span className="whitespace-nowrap text-[12px] leading-tight" data-testid={`whatif-future-${p.key}`}>
+              <strong className="font-semibold text-ink">{money(p.end)}</strong>
+              <span className="block text-muted">{p.name}</span>
+            </span>
+          </span>
+        );
+      })}
     </figure>
   );
 }

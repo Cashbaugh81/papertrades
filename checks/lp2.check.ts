@@ -21,6 +21,19 @@ for (const [w, h, name] of [[1440, 900, "d"], [375, 812, "m"]] as const) {
   const ok = await p.locator('[data-testid="whatif-photo"]').evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0);
   console.log(name, "photo loaded", ok, "page width ok", await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 }
+// the "You" slide: a ticker box, three made-up futures, and a CTA that names the ticker
+{
+  const p = await b.newPage({ viewport: { width: 1280, height: 900 } });
+  await p.goto(B);
+  await p.click('[data-testid="whatif-pick-you"]');
+  await p.fill('[data-testid="whatif-ticker-input"]', "tsla");
+  console.log("you: input upper-cases", (await p.inputValue('[data-testid="whatif-ticker-input"]')) === "TSLA");
+  console.log("you: three futures", (await p.locator('[data-testid^="whatif-future-"]').count()) === 4); // chart + 3 labels
+  console.log("you: CTA names it", (await p.innerText('[data-testid="whatif-you-cta"]')) === "Track TSLA with pretend money");
+  await p.click('[data-testid="whatif-you-cta"]');
+  await p.waitForURL(/\/start$/);
+  console.log("you: CTA goes to sign-up", p.url().endsWith("/start"));
+}
 // autoplay: away from the section, it should move on after 7s
 const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
 await p.goto(B);
