@@ -29,8 +29,18 @@ class NotFound extends Error {}
 /** Counts Tiingo requests, so a caller can stay inside the hourly limit. */
 export type CallCounter = { calls: number };
 
-/** The most Tiingo requests one refreshTicker can make (metadata + incremental + full). */
-export const MAX_CALLS_PER_TICKER = 3;
+/** The most Tiingo requests one refreshTicker can make (metadata, its upper-case retry, incremental, full). */
+export const MAX_CALLS_PER_TICKER = 4;
+
+/**
+ * The ticker as it goes into a Tiingo URL. Lower case normally; upper case
+ * for tickers whose lower-case path Tiingo refuses ("meta" collides with its
+ * own route, so /tiingo/daily/meta is a 404 while /tiingo/daily/META works).
+ */
+function pathOf(ticker: string, upper = UPPER_CASE_PATHS.has(ticker)): string {
+  return encodeURIComponent(upper ? ticker.toUpperCase() : ticker.toLowerCase());
+}
+const UPPER_CASE_PATHS = new Set(["META"]);
 
 async function tiingo(path: string, token: string, counter?: CallCounter): Promise<unknown> {
   if (counter) counter.calls++;
@@ -47,7 +57,7 @@ async function tiingo(path: string, token: string, counter?: CallCounter): Promi
 
 async function fetchBars(ticker: string, start: string, token: string, counter?: CallCounter): Promise<Bar[]> {
   const json = await tiingo(
-    `${encodeURIComponent(ticker.toLowerCase())}/prices?startDate=${start}&resampleFreq=daily`,
+    `${pathOf(ticker)}/prices?startDate=${start}&resampleFreq=daily`,
     token,
     counter,
   );
@@ -104,7 +114,15 @@ export async function refreshTicker(
     if (full && !name) {
       // One-off metadata call for a ticker we've never had: its name, and a
       // clean "not found" for typos.
-      const m = (await tiingo(encodeURIComponent(ticker.toLowerCase()), token, counter)) as { name?: string };
+      // A 404 in lower case gets one retry in upper case (see pathOf).
+      let m: { name?: string };
+      try {
+        m = (await tiingo(pathOf(ticker), token, counter)) as { name?: string };
+      } catch (e) {
+        if (!(e instanceof NotFound) || UPPER_CASE_PATHS.has(ticker)) throw e;
+        m = (await tiingo(pathOf(ticker, true), token, counter)) as { name?: string };
+        UPPER_CASE_PATHS.add(ticker);
+      }
       name = typeof m?.name === "string" ? m.name.trim() || null : null;
     }
 
