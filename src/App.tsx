@@ -27,6 +27,7 @@ import {
 } from "@/lib/api";
 import AuthPage from "@/pages/AuthPage";
 import LandingPage from "@/landing/LandingPage";
+import LandingPage2 from "@/landing/LandingPage2";
 import DashboardPage from "@/pages/DashboardPage";
 import SetupPage, { DEFAULT_FUND } from "@/pages/SetupPage";
 import Shell from "@/components/Shell";
@@ -79,6 +80,8 @@ function Root() {
   return (
     <Routes>
       <Route path="/" element={home} />
+      {/* A second landing page for marketing tests; shown to everyone, signed in or not. */}
+      <Route path="/lp2" element={<LandingPage2 />} />
       <Route path="/signin" element={account ? <Navigate to="/" replace /> : <AuthPage key="in" initialMode="in" />} />
       <Route path="/start" element={account ? <Navigate to="/" replace /> : <AuthPage key="up" initialMode="up" />} />
       <Route path="*" element={<Navigate to="/" replace />} />
