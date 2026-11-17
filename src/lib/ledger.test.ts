@@ -351,3 +351,79 @@ describe("weekly deposits and mix changes", () => {
     expect(s.pending.map((o) => o.kind)).toEqual(["rebalance"]);
   });
 });
+
+describe("a stock that started trading after the start date", () => {
+  // OLD trades from day 0 at 100 (flat); NEW starts trading on day 40 at 20, then 40 from day 80.
+  const days = dates.slice(0, 120);
+  const idx = buildIndex({
+    generated: "",
+    source: "listing",
+    series: {
+      OLD: { dates: days, closes: days.map(() => 100) },
+      NEW: { dates: days.slice(40), closes: days.slice(40).map((_, i) => (i + 40 < 80 ? 20 : 40)) },
+    },
+  });
+  const end = days[days.length - 1];
+  const first = (weights: Record<string, number>, over: Partial<Tx> = {}): Tx => ({
+    id: "m",
+    kind: "rebalance",
+    date: days[0],
+    weights,
+    ...over,
+  });
+
+  it("holds the whole amount as cash until its first trading day, then buys in at that close", () => {
+    const s = computeState(idx, pf({ startDate: days[0], initial: 10_000, tx: [first({ NEW: 1 })] }), end);
+    expect(s.fills.m.date).toBe(days[0]); // the mix is in force from the start date
+    expect(s.values[39]).toBe(10_000); // flat cash before NEW trades
+    expect(s.boughtIn).toEqual({ NEW: days[40] });
+    expect(s.holdings[0]).toMatchObject({ ticker: "NEW" });
+    expect(s.holdings[0].units).toBeCloseTo(500, 9); // $10,000 at 20
+    expect(s.value).toBeCloseTo(20_000, 6); // NEW doubled
+    expect(s.waiting).toEqual({});
+  });
+
+  it("in a mix, only the new stock's share waits; the rest is invested from the start", () => {
+    const s = computeState(idx, pf({ startDate: days[0], initial: 10_000, tx: [first({ OLD: 0.6, NEW: 0.4 })] }), days[20]);
+    const units = Object.fromEntries(s.holdings.map((h) => [h.ticker, h.units]));
+    expect(units.OLD).toBeCloseTo(60, 9); // $6,000 at 100 on day 0
+    expect(units.NEW).toBeUndefined();
+    expect(s.waiting).toEqual({ NEW: 4_000 });
+    expect(s.value).toBeCloseTo(10_000, 6); // waiting cash counts toward the value
+  });
+
+  it("weekly deposits set aside the new stock's share too, and it all buys in on day one of trading", () => {
+    const s = computeState(
+      idx,
+      pf({ startDate: days[0], initial: 1_000, weekly: 100, tx: [first({ OLD: 0.5, NEW: 0.5 })] }),
+      end,
+    );
+    // Before day 40: 7 weekly deposits (days 5, 10, … 35), $50 each set aside for NEW.
+    const newUnits = s.holdings.find((h) => h.ticker === "NEW")!.units;
+    const beforeListing = 500 + 7 * 50; // initial share + deposits on days 5..35
+    const after = Array.from({ length: 23 }, (_, k) => 5 * (k + 1)).filter((d) => d >= 40);
+    const expected = beforeListing / 20 + after.reduce((u, d) => u + 50 / (d < 80 ? 20 : 40), 0);
+    expect(newUnits).toBeCloseTo(expected, 6);
+    expect(s.cash).toBeCloseTo(0, 6);
+    expect(s.invested).toBe(1_000 + 23 * 100);
+  });
+
+  it("a mix whose stocks all trade from the start is unaffected", () => {
+    const s = computeState(idx, pf({ startDate: days[50], initial: 10_000, tx: [first({ OLD: 0.5, NEW: 0.5 }, { date: days[50] })] }), end);
+    expect(s.boughtIn).toEqual({});
+    expect(s.waiting).toEqual({});
+    expect(s.fills.m.date).toBe(days[50]);
+  });
+
+  it("a live mix change to a stock that isn't trading yet doesn't hold up the rest", () => {
+    const start = mix0(days[0]);
+    const change: Tx = { id: "c", kind: "rebalance", date: days[10], placedAt: nyTime(days[10], 10), weights: { OLD: 0.5, NEW: 0.5 } };
+    const s = computeState(idx, pf({ startDate: days[0], initial: 10_000, tx: [start, change] }), days[20]);
+    expect(s.fills.c.date).toBe(days[10]);
+    expect(s.waiting).toEqual({ NEW: 5_000 });
+  });
+
+  function mix0(day: string): Tx {
+    return { id: "m", kind: "rebalance", date: day, weights: { OLD: 1 } };
+  }
+});

@@ -18,14 +18,10 @@ export function rowsFromMix(mix?: Mix): Row[] {
 
 /**
  * The mix the rows describe, or a reason it isn't one yet. Tickers must have
- * been looked up and found; when `startDate` is given (a past start), each
- * must have prices from that date.
+ * been looked up and found. A stock that started trading after the start date
+ * is fine: its share waits in cash until its first trading day (see ledger).
  */
-export function mixFromRows(
-  rows: Row[],
-  info: Record<string, TickerInfo>,
-  startDate?: string,
-): { mix?: Mix; problem?: string } {
+export function mixFromRows(rows: Row[], info: Record<string, TickerInfo>): { mix?: Mix; problem?: string } {
   const filled = rows.filter((r) => r.ticker.trim() || r.pct.trim());
   if (filled.length === 0) return { problem: "Add at least one investment." };
   const mix: Mix = {};
@@ -40,9 +36,6 @@ export function mixFromRows(
     if (!i) return { problem: `Checking ${t}…` };
     if (i.status === "not_found") return { problem: `There's no ticker called ${t}.` };
     if (i.status !== "ok") return { problem: `Couldn't load ${t} right now.` };
-    if (startDate && i.first_date && i.first_date > startDate) {
-      return { problem: `${t} only has prices from ${humanDate(i.first_date)}. Pick a later start date or another fund.` };
-    }
     mix[t] = p;
     total += p;
   }
@@ -84,10 +77,22 @@ type Props = {
   onLimit?: () => void;
   /** Show the mix but don't allow changes (a free account's portfolio 1). */
   locked?: boolean;
+  /** The day the money goes in: a stock that started trading later gets a note that its share waits in cash. */
+  startDate?: string;
 };
 
 /** Rows of ticker + percentage. Unknown tickers are looked up as they're typed. */
-export default function MixEditor({ rows, onChange, info, lookup, idPrefix, maxTickers = MAX_ROWS, onLimit, locked = false }: Props) {
+export default function MixEditor({
+  rows,
+  onChange,
+  info,
+  lookup,
+  idPrefix,
+  maxTickers = MAX_ROWS,
+  onLimit,
+  locked = false,
+  startDate,
+}: Props) {
   const total = useMemo(() => rows.reduce((a, r) => a + (Number(r.pct) || 0), 0), [rows]);
   const [asked, setAsked] = useState<Set<string>>(() => new Set());
   // Rows whose search is still running.
@@ -179,6 +184,11 @@ export default function MixEditor({ rows, onChange, info, lookup, idPrefix, maxT
             {(status || info[t]?.name) && (
               <div className={`mt-0.5 truncate pl-0.5 text-[11px] ${status && status !== "checking…" ? "text-loss" : "text-muted"}`}>
                 {status || info[t]?.name}
+              </div>
+            )}
+            {!status && startDate && info[t]?.status === "ok" && info[t]?.first_date && info[t]!.first_date! > startDate && (
+              <div className="mt-0.5 pl-0.5 text-[11px] leading-snug text-flag" data-testid={`${idPrefix}-listing-${i}`}>
+                Started trading {humanDate(info[t]!.first_date!)}. Its share stays in cash until then.
               </div>
             )}
           </div>

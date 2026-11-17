@@ -25,6 +25,10 @@ import { closesAfter, nyDate } from "@/lib/market";
  *   (volatility, drawdown) are measured on time-weighted returns, which strip
  *   every deposit out of the path.
  * - Fractional units throughout.
+ * - A stock that hadn't started trading yet on the day money goes into it
+ *   (its first close is later): its share is set aside as cash and buys in at
+ *   the close of its first trading day. The rest of the mix is invested as
+ *   usual. Contributions do the same for that stock's share.
  */
 
 export function txDate(t: Tx): string {
@@ -37,7 +41,21 @@ type Book = {
   rejected: string[];
   /** The mix contributions follow: the last filled rebalance, else the portfolio's weights. */
   weights?: Record<string, number>;
+  /** Cash set aside for stocks that haven't started trading yet, by ticker. */
+  waiting: Map<string, number>;
 };
+
+/** True once `ticker` has traded on or before `day`. */
+function listedBy(index: PriceIndex, ticker: string, day: string): boolean {
+  return closeOn(index, ticker, day) !== undefined;
+}
+
+/** Cash set aside for unlisted stocks, in total. */
+function waitingTotal(book: Book): number {
+  let n = 0;
+  for (const v of book.waiting.values()) n += v;
+  return n;
+}
 
 /** First index in a sorted calendar whose day is >= `day`, or -1. */
 function lowerBound(calendar: string[], day: string): number {
@@ -91,11 +109,14 @@ export function fillFor(
  * A mix change fills at the first close (after it was placed) where every
  * ticker in the new mix has its own close, so nothing is bought at a stale
  * price. Legacy rows (no placedAt: a what-if's first mix) fill on their date.
+ * A ticker that hasn't started trading yet doesn't hold the mix up: its share
+ * waits in cash (see applyRebalance).
  */
 function rebalanceDay(index: PriceIndex, tx: Tx, days: string[]): { day: string; price: number } | undefined {
   const tickers = Object.keys(tx.weights ?? {});
   if (tickers.length === 0) return undefined;
-  const allClose = (day: string) => tickers.every((t) => (index.close(t, day) ?? 0) > 0);
+  const allClose = (day: string) =>
+    tickers.every((t) => (index.close(t, day) ?? 0) > 0 || !listedBy(index, t, day));
   if (tx.placedAt) {
     const placed = Date.parse(tx.placedAt);
     if (!Number.isFinite(placed)) return undefined;
@@ -118,20 +139,24 @@ function rebalanceDay(index: PriceIndex, tx: Tx, days: string[]): { day: string;
  * contributions follow.
  */
 function applyRebalance(index: PriceIndex, book: Book, tx: Tx, day: string): Fill {
-  let total = book.cash;
+  let total = book.cash + waitingTotal(book);
   for (const [t, u] of book.units) {
     if (u <= 1e-12) continue;
     total += u * (closeOn(index, t, day) ?? 0);
   }
   book.units = new Map();
+  book.waiting = new Map();
   book.cash = 0;
   const weights = tx.weights ?? {};
   for (const [t, w] of Object.entries(weights)) {
-    const px = index.close(t, day)!; // rebalanceDay guarantees a close
-    book.units.set(t, (total * w) / px);
+    // rebalanceDay guarantees a close, unless the ticker hasn't started trading.
+    const px = index.close(t, day);
+    if (px !== undefined && px > 0) book.units.set(t, (total * w) / px);
+    else book.waiting.set(t, total * w);
   }
   book.weights = weights;
-  return { date: day, price: 0, units: 0, amount: total };
+  const waited = [...book.waiting.keys()].sort();
+  return { date: day, price: 0, units: 0, amount: total, ...(waited.length ? { waited } : {}) };
 }
 
 function applyOrder(
@@ -203,13 +228,14 @@ function deployContribution(
   for (const [ticker, w] of Object.entries(weights)) {
     if (!(w > 0)) continue;
     const px = closeOn(index, ticker, day);
-    if (!px) {
-      book.rejected.push(`contribution ${day}: no price for ${ticker}`);
-      continue;
-    }
     const spend = amount * w;
     if (spend > book.cash + 1e-6) continue;
     book.cash -= spend;
+    if (!px) {
+      // Not trading yet: its share waits in cash with the rest set aside for it.
+      book.waiting.set(ticker, (book.waiting.get(ticker) ?? 0) + spend);
+      continue;
+    }
     book.units.set(ticker, (book.units.get(ticker) ?? 0) + spend / px);
   }
 }
@@ -227,7 +253,9 @@ export function computeState(
   const start = p.startDate;
   const dates = index.calendar.filter((d) => d >= start && d <= endDate);
 
-  const book: Book = { units: new Map(), cash: 0, rejected: [], weights: p.weights };
+  const book: Book = { units: new Map(), cash: 0, rejected: [], weights: p.weights, waiting: new Map() };
+  /** When each set-aside stock bought in: ticker → its first trading day. */
+  const boughtIn: Record<string, string> = {};
   const fills: Record<string, Fill> = {};
   const rejections: PortfolioState["rejections"] = {};
   const pendingTx: Tx[] = [];
@@ -283,6 +311,15 @@ export function computeState(
     const day = dates[i];
     let flow = 0;
 
+    // A stock that starts trading today buys in with the cash set aside for it.
+    for (const [t, amt] of book.waiting) {
+      const px = index.close(t, day);
+      if (px === undefined || !(px > 0)) continue;
+      book.units.set(t, (book.units.get(t) ?? 0) + amt / px);
+      book.waiting.delete(t);
+      boughtIn[t] = day;
+    }
+
     // Initial capital on day one, then the weekly (or monthly) contribution on
     // each period's first trading day. On day one only the initial capital
     // lands: the first contribution belongs to the following period.
@@ -332,7 +369,7 @@ export function computeState(
       const px = closeOn(index, ticker, day);
       if (px !== undefined) holdingsValue += units * px;
     }
-    values.push(holdingsValue + book.cash);
+    values.push(holdingsValue + book.cash + waitingTotal(book));
   }
 
   // A portfolio created after the last day in the data has no trading days yet.
@@ -382,7 +419,7 @@ export function computeState(
   const finalDay = dates.length ? dates[dates.length - 1] : start;
   // With trading days, every deposit is already in the path. Without any, the
   // portfolio is all cash.
-  const value = values.length ? values[values.length - 1] : book.cash;
+  const value = values.length ? values[values.length - 1] : book.cash + waitingTotal(book);
 
   const holdings: Holding[] = [];
   let totalHoldings = 0;
@@ -439,6 +476,8 @@ export function computeState(
     fills,
     rejections,
     currentWeights: book.weights,
+    waiting: Object.fromEntries(book.waiting),
+    boughtIn,
   };
 }
 

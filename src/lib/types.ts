@@ -99,6 +99,8 @@ export type Fill = {
   price: number;
   units: number;
   amount: number;
+  /** For a rebalance: tickers not trading yet, whose share was set aside as cash. */
+  waited?: string[];
 };
 
 export type PendingOrder = {
@@ -145,6 +147,10 @@ export type PortfolioState = {
   fills: Record<string, Fill>;
   /** The mix currently in force (the last filled rebalance, else the portfolio's weights). */
   currentWeights?: Record<string, number>;
+  /** Cash still set aside for stocks that haven't started trading yet, by ticker. */
+  waiting: Record<string, number>;
+  /** Stocks whose set-aside cash bought in later, and the day they did (their first trading day). */
+  boughtIn: Record<string, string>;
   /** Orders that reached their close but could not be filled, by transaction id. */
   rejections: Record<string, { date: string; reason: string }>;
   lastDate: string;

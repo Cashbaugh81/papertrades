@@ -210,7 +210,10 @@ async function main() {
   check("all four portfolios come along to the setup page", (await page.inputValue('[data-testid="setup-4-ticker-0"]')) === "SPY");
   await page.locator('input[type="radio"]').nth(1).check();
   await page.fill('input[aria-label="Start date"]', "2001-01-02");
-  check("a date before VTI existed is caught", await waitForText(page, /VTI only has prices from/, 20_000));
+  check(
+    "a date before VTI existed gets a note, not a block",
+    await waitForText(page, /Started trading May 31, 2001\. Its share stays in cash until then\./, 20_000),
+  );
   await page.fill('input[aria-label="Start date"]', "2020-01-02");
   await waitForNoText(page, /checking…/, 45_000);
   await page.click('button:has-text("Run the what-if")');
