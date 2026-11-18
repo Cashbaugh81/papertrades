@@ -285,12 +285,13 @@ function Chart({ story, up }: { story: WhatIf; up: boolean }) {
  * wobble (fixed seed, so it looks the same every visit) pinned to an end value.
  */
 const FUTURES = [
-  { key: "up-big", name: "Takes off", end: 31_000, wobble: 0.055, seed: 11, color: "#1b6b4a" },
-  { key: "steady", name: "Grows steadily", end: 14_000, wobble: 0.025, seed: 7, color: "#8a5a12" },
-  { key: "down", name: "Falls", end: 6_000, wobble: 0.04, seed: 3, color: "#a03a28" },
+  { key: "up-big", name: "Takes off", end: 31_000, vol: 0.03, seed: 21, color: "#1b6b4a" },
+  { key: "steady", name: "Grows steadily", end: 14_000, vol: 0.016, seed: 8, color: "#8a5a12" },
+  { key: "down", name: "Falls", end: 6_000, vol: 0.024, seed: 5, color: "#a03a28" },
 ] as const;
 
-const STEPS = 120;
+/** Trading days drawn per path, like the ~160 on the real stories. */
+const STEPS = 160;
 
 /** A small seeded random-number generator (mulberry32), so the paths never change. */
 function rng(seed: number) {
@@ -304,11 +305,19 @@ function rng(seed: number) {
   };
 }
 
-/** A wobbly path from $10,000 to `end`: a random walk in log terms, bent to finish exactly at `end`. */
-function futurePath(end: number, wobble: number, seed: number): number[] {
+/**
+ * A stock-like path from $10,000 to `end`: daily moves that are mostly small
+ * with the odd big jump (as real prices have), then bent so it finishes
+ * exactly at `end`.
+ */
+function futurePath(end: number, vol: number, seed: number): number[] {
   const r = rng(seed);
   const walk = [0];
-  for (let i = 1; i <= STEPS; i++) walk.push(walk[i - 1] + (r() + r() + r() - 1.5) * wobble);
+  for (let i = 1; i <= STEPS; i++) {
+    const normal = (r() + r() + r() + r() - 2) * 1.73; // ~N(0, 1)
+    const jump = r() < 0.04 ? (r() < 0.5 ? -1 : 1) * 3 : 0;
+    walk.push(walk[i - 1] + (normal + jump) * vol);
+  }
   const drift = Math.log(end / 10_000);
   return walk.map((w, i) => {
     const t = i / STEPS;
@@ -316,7 +325,7 @@ function futurePath(end: number, wobble: number, seed: number): number[] {
   });
 }
 
-const PATHS = FUTURES.map((f) => ({ ...f, values: futurePath(f.end, f.wobble, f.seed) }));
+const PATHS = FUTURES.map((f) => ({ ...f, values: futurePath(f.end, f.vol, f.seed) }));
 
 const TICKER_RE = /^[A-Z0-9][A-Z0-9.-]{0,11}$/;
 
@@ -359,7 +368,7 @@ function YouSlide() {
       <p className="mb-0 mt-7 text-[12px] uppercase tracking-[0.06em] text-muted">Three ways it could go</p>
       <FutureChart ticker={valid ? ticker : undefined} />
 
-      <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3">
+      <div className="mt-9 flex flex-wrap items-center gap-x-5 gap-y-3">
         <Link
           to="/start"
           className="inline-flex min-h-12 items-center rounded-md bg-accent px-6 text-[15px] font-semibold text-paper no-underline hover:bg-[#163a2e]"
@@ -377,20 +386,38 @@ function YouSlide() {
   );
 }
 
-/** Three made-up paths fanning out from "Today", with each one's end value. */
+/**
+ * Three made-up paths fanning out from today's $10,000, drawn like the real
+ * stories' charts (solid lines, a dashed "$10,000 in" line, a dot at each
+ * end) with a light band showing the spread between the best and worst path.
+ */
 function FutureChart({ ticker }: { ticker?: string }) {
   const W = 640;
   const H = 240;
   const all = PATHS.flatMap((p) => p.values);
   const lo = Math.min(...all);
   const hi = Math.max(...all);
-  // Room on the left for "Today" and on the right for the end labels.
-  const fx = (i: number) => 0.17 + (i / STEPS) * 0.55;
-  const fy = (v: number) => 0.06 + (1 - (v - lo) / (hi - lo)) * 0.84;
+  // The paths use the left 76%; the end labels sit to the right.
+  const fx = (i: number) => (i / STEPS) * 0.76;
+  const fy = (v: number) => 0.04 + (1 - (v - lo) / (hi - lo)) * 0.92;
   const startTop = fy(10_000) * 100;
+  const pt = (i: number, v: number) => `${(fx(i) * W).toFixed(1)} ${(fy(v) * H).toFixed(1)}`;
+
+  // The band between the highest and lowest path on each day.
+  const top = Array.from({ length: STEPS + 1 }, (_, i) => Math.max(...PATHS.map((p) => p.values[i])));
+  const bottom = Array.from({ length: STEPS + 1 }, (_, i) => Math.min(...PATHS.map((p) => p.values[i])));
+  const band =
+    top.map((v, i) => `${i ? "L" : "M"}${pt(i, v)}`).join(" ") +
+    " " +
+    bottom
+      .map((v, i) => [i, v] as const)
+      .reverse()
+      .map(([i, v]) => `L${pt(i, v)}`)
+      .join(" ") +
+    " Z";
 
   return (
-    <figure className="relative m-0 mt-3 h-[200px] md:h-[240px]" data-testid="whatif-future-chart">
+    <figure className="relative m-0 mt-3 h-[210px] md:h-[240px]" data-testid="whatif-future-chart">
       <svg
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
@@ -400,9 +427,10 @@ function FutureChart({ ticker }: { ticker?: string }) {
         ).join(", ")}.`}
         className="absolute inset-0 block h-full w-full overflow-visible"
       >
-        <line x1="0" y1={H} x2={W} y2={H} stroke="#e4dcce" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        <line x1="0" y1={H} x2={W * fx(STEPS)} y2={H} stroke="#e4dcce" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        <path d={band} fill="#1d1b19" fillOpacity="0.045" />
         <line
-          x1={W * fx(0)}
+          x1="0"
           y1={(startTop / 100) * H}
           x2={W * fx(STEPS)}
           y2={(startTop / 100) * H}
@@ -414,11 +442,10 @@ function FutureChart({ ticker }: { ticker?: string }) {
         {PATHS.map((p) => (
           <path
             key={p.key}
-            d={p.values.map((v, i) => `${i ? "L" : "M"}${(fx(i) * W).toFixed(1)} ${(fy(v) * H).toFixed(1)}`).join(" ")}
+            d={p.values.map((v, i) => `${i ? "L" : "M"}${pt(i, v)}`).join(" ")}
             fill="none"
             stroke={p.color}
-            strokeWidth="2.25"
-            strokeDasharray="6 4"
+            strokeWidth="2"
             strokeLinejoin="round"
             strokeLinecap="round"
             vectorEffect="non-scaling-stroke"
@@ -430,22 +457,22 @@ function FutureChart({ ticker }: { ticker?: string }) {
       <span
         aria-hidden
         className="absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-ink"
-        style={{ left: `${fx(0) * 100}%`, top: `${startTop}%` }}
+        style={{ left: 0, top: `${startTop}%` }}
       />
-      <span
-        aria-hidden
-        className="absolute -translate-y-1/2 text-right text-[12px] leading-tight"
-        style={{ right: `${(1 - fx(0)) * 100 + 2.5}%`, top: `${startTop}%` }}
-      >
-        <strong className="block font-semibold text-ink">Today</strong>
-        <span className="text-muted">$10,000</span>
+      <span aria-hidden className="absolute left-0 top-full mt-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-ink">
+        Today <span className="font-normal normal-case tracking-normal text-muted">· $10,000 in</span>
       </span>
 
       {/* Each path's end: a dot in its colour, then the value and name in ink. */}
       {PATHS.map((p) => {
         const top = fy(p.end) * 100;
         return (
-          <span key={p.key} aria-hidden className="absolute flex -translate-y-1/2 items-center gap-2" style={{ left: `${fx(STEPS) * 100}%`, top: `${top}%` }}>
+          <span
+            key={p.key}
+            aria-hidden
+            className="absolute flex -translate-y-1/2 items-center gap-2"
+            style={{ left: `${fx(STEPS) * 100}%`, top: `${top}%` }}
+          >
             <span className="-ml-1.5 size-3 shrink-0 rounded-full border-2 border-white" style={{ background: p.color }} />
             <span className="whitespace-nowrap text-[12px] leading-tight" data-testid={`whatif-future-${p.key}`}>
               <strong className="font-semibold text-ink">{money(p.end)}</strong>
