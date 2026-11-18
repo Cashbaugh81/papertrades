@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import PortraitCarousel from "@/landing/PortraitCarousel";
+import WhoItsFor from "@/landing/WhoItsFor";
 import { COLUMNS, DEFAULT_MOMENT, ENDINGS, MOMENTS, MOODS, PHOTO_ALT, SERIES } from "@/landing/data";
 
 const BASE = import.meta.env.BASE_URL;
@@ -389,6 +390,9 @@ export default function LandingPage() {
             </p>
           </div>
         </section>
+
+        {/* ---- who it's for: example use cases ---- */}
+        <WhoItsFor />
 
         {/* ---- honesty strip ---- */}
         <section aria-label="What Ledger is and isn't" className="mx-auto max-w-[1180px] px-6 py-12">

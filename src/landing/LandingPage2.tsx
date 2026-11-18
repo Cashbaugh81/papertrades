@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import PortraitCarousel from "@/landing/PortraitCarousel";
+import WhoItsFor from "@/landing/WhoItsFor";
 import WhatIfStories from "@/landing/WhatIfStories";
 import { ENDINGS } from "@/landing/data";
 
@@ -182,6 +183,9 @@ export default function LandingPage2() {
             </p>
           </div>
         </section>
+
+        {/* ---- who it's for: example use cases ---- */}
+        <WhoItsFor />
 
         {/* ---- honesty strip ---- */}
         <section aria-label="What Ledger is and isn't" className="mx-auto max-w-[1180px] px-6 py-12">
