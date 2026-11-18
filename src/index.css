@@ -121,3 +121,7 @@
 @media (prefers-reduced-motion: reduce) {
   .whatif-in { animation: none; }
 }
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
