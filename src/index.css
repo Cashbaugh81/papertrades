@@ -125,3 +125,16 @@
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+/* Dashboard lesson cards: the next card slides in from the side it came from. */
+@keyframes lesson-in-r {
+  from { opacity: 0; transform: translateX(24px); }
+}
+@keyframes lesson-in-l {
+  from { opacity: 0; transform: translateX(-24px); }
+}
+.lesson-in-r { animation: lesson-in-r 260ms ease-out both; }
+.lesson-in-l { animation: lesson-in-l 260ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .lesson-in-r, .lesson-in-l { animation: none; }
+}

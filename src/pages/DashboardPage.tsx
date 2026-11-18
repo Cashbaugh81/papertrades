@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Copy, History, Info, Plus } from "lucide-react";
+import { Copy, History, Plus } from "lucide-react";
 import MixEditor, { mixFromRows, rowsFromMix, type Row } from "@/components/MixEditor";
 import PathChart, { SERIES_COLORS } from "@/components/PathChart";
 import { ErrorNote, MAX_PORTFOLIOS } from "@/pages/SetupPage";
 import type { ActiveSet, Column, Limits, Mix, TickerInfo } from "@/lib/api";
 import UpgradeDialog, { type UpgradeReason } from "@/components/UpgradeDialog";
+import LessonCards from "@/components/LessonCards";
 import PortfolioName, { portfolioName } from "@/components/PortfolioName";
 import { ordinal, rankTints, tintColors, type RankTint } from "@/lib/rankTint";
 import { humanDate, money, pct, signedPct } from "@/lib/ledger";
@@ -134,13 +135,8 @@ export default function DashboardPage(props: Props) {
         </div>
       </section>
 
-      {set.whatIf && (
-        <p className="flex items-start gap-2 rounded-sm border-l-2 border-flag bg-flag/5 px-3 py-2 text-[12px] leading-snug text-flag">
-          <Info size={13} className="mt-0.5 shrink-0" />
-          This replays history from {humanDate(set.startDate)}. It shows what would have happened, but the choices were
-          made knowing how things turned out, so it isn't a record of your judgement. Start from today for that.
-        </p>
-      )}
+      {/* ---- lesson cards (in place of the what-if note, for now) ------------- */}
+      <LessonCards />
 
       {/* ---- the portfolios ------------------------------------------------------ */}
       <section aria-labelledby="portfolios-title">

@@ -183,6 +183,30 @@ export async function loadPlan(): Promise<Plan> {
   return (data?.plan as Plan | undefined) ?? "free";
 }
 
+export type UserSettings = { lessonsHidden: boolean; lessonIndex: number };
+
+/** The signed-in account's UI settings; no row means defaults. */
+export async function loadSettings(): Promise<UserSettings> {
+  const { data, error } = await supabase.from("user_settings").select("lessons_hidden, lesson_index").maybeSingle();
+  if (error) throw error;
+  return { lessonsHidden: data?.lessons_hidden ?? false, lessonIndex: data?.lesson_index ?? 0 };
+}
+
+/** Save some of the signed-in account's UI settings. */
+export async function saveSettings(patch: Partial<UserSettings>): Promise<void> {
+  const { data: auth } = await supabase.auth.getUser();
+  const uid = auth.user?.id;
+  if (!uid) return;
+  const row: { user_id: string; updated_at: string; lessons_hidden?: boolean; lesson_index?: number } = {
+    user_id: uid,
+    updated_at: new Date().toISOString(),
+  };
+  if (patch.lessonsHidden !== undefined) row.lessons_hidden = patch.lessonsHidden;
+  if (patch.lessonIndex !== undefined) row.lesson_index = patch.lessonIndex;
+  const { error } = await supabase.from("user_settings").upsert(row, { onConflict: "user_id" });
+  if (error) throw error;
+}
+
 /**
  * Start a comparison. The server archives the current one (kept, not
  * deleted), and decides whether this is live (today) or a what-if (past).

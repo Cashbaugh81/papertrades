@@ -22,6 +22,12 @@ export type Database = {
         Update: never;
         Relationships: [];
       };
+      user_settings: {
+        Row: { user_id: string; lessons_hidden: boolean; lesson_index: number; updated_at: string };
+        Insert: { user_id: string; lessons_hidden?: boolean; lesson_index?: number; updated_at?: string };
+        Update: { lessons_hidden?: boolean; lesson_index?: number; updated_at?: string };
+        Relationships: [];
+      };
       waitlist: {
         Row: { user_id: string; email: string; reason: string; created_at: string };
         Insert: never;
