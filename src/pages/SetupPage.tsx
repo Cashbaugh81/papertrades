@@ -252,6 +252,7 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
                   <PortfolioName
                     slot={slot}
                     customName={names[i]}
+                    mix={typedMix(cols[i])}
                     onSave={(name) => setNames((n) => n.map((v, k) => (k === i ? name : v)))}
                     testId={`setup-col-${slot}-name`}
                   />
@@ -360,4 +361,17 @@ export function ErrorNote({ text }: { text: string }) {
       {text}
     </p>
   );
+}
+
+/**
+ * The mix as typed, before any lookup: enough to pick portfolio 1's default
+ * name ("Baseline Market ETF" while it's VTI 100%) without a flicker.
+ */
+function typedMix(rows: Row[]): Mix {
+  const out: Mix = {};
+  for (const r of rows) {
+    const t = r.ticker.trim().toUpperCase();
+    if (t) out[t] = (out[t] ?? 0) + (Number(r.pct) || 0) / 100;
+  }
+  return out;
 }

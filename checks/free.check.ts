@@ -54,6 +54,7 @@ check("setup clone fills the empty portfolio 3", await (async () => {
 await page.fill('[data-testid="setup-3-ticker-0"]', "QQQ");
 await settle();
 check("…and stays editable", (await page.inputValue('[data-testid="setup-3-ticker-0"]')) === "QQQ" && (await page.inputValue('[data-testid="setup-2-ticker-0"]')) === "NVDA");
+check("setup: portfolio 1 is called Baseline Market ETF", (await page.innerText('[data-testid="setup-col-1-name"]')) === "Baseline Market ETF");
 await page.click('[data-testid="setup-col-1-clone"]');
 check("cloning with no room left asks for a paid account", await dialog().isVisible() && /up to 3 portfolios/.test(await dialog().innerText()));
 await closeDialog();
@@ -64,6 +65,7 @@ await page.click('button:has-text("Start from today")');
 await page.getByText(/Live record/).waitFor({ timeout: 60_000 });
 check("portfolio 1 has no Change mix", (await page.locator('[data-testid="col-1"] button:has-text("Change mix")').count()) === 0);
 check("…and says why", await page.locator('[data-testid="col-1-locked"]').isVisible());
+check("a free account's portfolio 1 is called Baseline Market ETF", (await page.innerText('[data-testid="col-1-name"]')) === "Baseline Market ETF");
 check("…but can be cloned", await page.locator('[data-testid="col-1-clone"]').isVisible());
 check("the counter shows the free limit", /3\s*of\s*3/i.test(await page.innerText("#portfolios-title")));
 
