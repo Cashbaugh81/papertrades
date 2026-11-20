@@ -7,6 +7,7 @@ import type { ActiveSet, Column, Limits, Mix, TickerInfo } from "@/lib/api";
 import UpgradeDialog, { type UpgradeReason } from "@/components/UpgradeDialog";
 import LessonCards from "@/components/LessonCards";
 import PortfolioName, { portfolioName } from "@/components/PortfolioName";
+
 import { ordinal, rankTints, tintColors, type RankTint } from "@/lib/rankTint";
 import { humanDate, money, pct, signedPct } from "@/lib/ledger";
 import type { PortfolioState, Tx } from "@/lib/types";
@@ -87,7 +88,7 @@ export default function DashboardPage(props: Props) {
   );
   // The chart names portfolios by number (a mix's tickers don't fit); hovering shows what's in each.
   const chartLabels = useMemo(
-    () => Object.fromEntries(set.columns.map((c) => [c.portfolio.id, portfolioName(c.slot, c.customName)])),
+    () => Object.fromEntries(set.columns.map((c) => [c.portfolio.id, portfolioName(c.slot, c.customName, latestMix(c))])),
     [set.columns],
   );
   const chartMixes = useMemo(
@@ -273,12 +274,15 @@ function ColumnCard({
           <PortfolioName
             slot={column.slot}
             customName={column.customName}
+            mix={latestMix(column)}
             onSave={(name) => onRename(p.id, name)}
             testId={`col-${column.slot}-name`}
           />
         </h2>
         <span className="micro shrink-0">
-          {column.slot === 1 ? "baseline" : column.customName ? `portfolio ${column.slot}` : ""}
+          {portfolioName(column.slot, column.customName, latestMix(column)) !== `Portfolio ${column.slot}`
+            ? `portfolio ${column.slot}`
+            : ""}
         </span>
       </div>
       <div className="mt-0.5 text-[11px] text-muted" data-testid={`col-${column.slot}-mix`}>
@@ -612,7 +616,7 @@ function DecisionLog({ set, states, onCancelTx }: { set: ActiveSet; states: Map<
             <li key={tx.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-3.5 py-2.5">
               <div className="min-w-0">
                 <span className="text-muted">{humanDate(tx.date)} · </span>
-                <span className="font-medium">{portfolioName(column.slot, column.customName)}</span>
+                <span className="font-medium">{portfolioName(column.slot, column.customName, latestMix(column))}</span>
                 <span className="text-muted"> {first ? "started with" : "changed to"} </span>
                 <span>{mixLabel(tx.weights)}</span>
                 {tx.note && <div className="mt-0.5 text-[12px] text-muted">“{tx.note}”</div>}
@@ -658,4 +662,10 @@ function lateNotes(state: PortfolioState): string[] {
     .map(([t, day]) => `${t}'s share was held as cash until it started trading on ${humanDate(day)}.`);
   for (const t of Object.keys(state.waiting ?? {}).sort()) out.push(`${t}'s share is held as cash until it starts trading.`);
   return out;
+}
+
+/** The mix a portfolio was last set to (a pending change counts): it decides portfolio 1's default name. */
+function latestMix(column: Column): Mix | undefined {
+  const r = [...column.portfolio.tx].reverse().find((t) => t.kind === "rebalance");
+  return r?.weights;
 }

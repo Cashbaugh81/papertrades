@@ -67,7 +67,8 @@ await page.evaluate(() => scrollTo(0, 0));
 // ---- names on the dashboard ----
 const nameOf = (slot: number) => page.innerText(`[data-testid="col-${slot}-name"]`);
 check("the setup name carried over", (await nameOf(2)) === "Big tech");
-check("unnamed portfolios show Portfolio N", (await nameOf(1)) === "Portfolio 1" && (await nameOf(3)) === "Portfolio 3");
+check("unnamed portfolios show Portfolio N", (await nameOf(3)) === "Portfolio 3");
+check("portfolio 1 on VTI is called Baseline Market ETF", (await nameOf(1)) === "Baseline Market ETF");
 check("the chart legend uses the name", (await page.getByText("Big tech").count()) >= 2);
 await page.click('[data-testid="col-3-name-rename"]');
 await page.fill('[data-testid="col-3-name-input"]', "My picks");
@@ -90,6 +91,15 @@ await settle();
 await page.click('[data-testid="col-3"] button:has-text("Replace mix")');
 await page.locator('[data-testid="col-3-mix"]:has-text("SPY")').waitFor({ timeout: 20_000 });
 check("changing the mix keeps the name", (await nameOf(3)) === "My picks");
+
+// A paid account changing portfolio 1 away from VTI: its default name becomes "Portfolio 1".
+await page.click('[data-testid="col-1"] button:has-text("Change mix")');
+await page.fill('[data-testid="edit-1-ticker-0"]', "QQQ");
+await settle();
+await page.click('[data-testid="col-1"] button:has-text("Replace mix")');
+await page.locator('[data-testid="col-1-mix"]:has-text("QQQ")').waitFor({ timeout: 20_000 });
+check("portfolio 1 off VTI is called Portfolio 1", (await nameOf(1)) === "Portfolio 1");
+check("…in the chart legend too", (await page.getByText("Baseline Market ETF").count()) === 0);
 
 // Clearing the name goes back to the default.
 await page.click('[data-testid="col-3-name-rename"]');

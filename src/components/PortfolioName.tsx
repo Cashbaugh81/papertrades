@@ -3,30 +3,53 @@ import { Pencil } from "lucide-react";
 
 export const MAX_NAME = 40;
 
-/** What a portfolio is called: its chosen name, or "Portfolio N". */
-export function portfolioName(slot: number, customName?: string | null): string {
-  return customName?.trim() || `Portfolio ${slot}`;
+/** The fund portfolio 1 starts as (and is locked to on a free account). */
+export const BASELINE_FUND = "VTI";
+/** Portfolio 1's default name while it holds only the baseline fund. */
+export const BASELINE_NAME = "Baseline Market ETF";
+
+/** True for a mix that is the baseline fund and nothing else. */
+export function isBaselineMix(mix?: Record<string, number> | null): boolean {
+  if (!mix) return false;
+  const keys = Object.keys(mix);
+  return keys.length === 1 && keys[0] === BASELINE_FUND && Math.abs(mix[BASELINE_FUND] - 1) < 1e-9;
+}
+
+/** The name a portfolio has when nobody has named it. */
+export function defaultName(slot: number, mix?: Record<string, number> | null): string {
+  return slot === 1 && isBaselineMix(mix) ? BASELINE_NAME : `Portfolio ${slot}`;
+}
+
+/**
+ * What a portfolio is called: its chosen name, or else "Baseline Market ETF"
+ * for portfolio 1 while it's all VTI, or "Portfolio N".
+ */
+export function portfolioName(slot: number, customName?: string | null, mix?: Record<string, number> | null): string {
+  return customName?.trim() || defaultName(slot, mix);
 }
 
 /**
  * A portfolio's name with a pencil to rename it in place. Enter or leaving the
- * box saves; Escape cancels; saving an empty box goes back to "Portfolio N".
+ * box saves; Escape cancels; saving an empty box goes back to the default name.
  */
 export default function PortfolioName({
   slot,
   customName,
+  mix,
   onSave,
   testId,
   className = "",
 }: {
   slot: number;
   customName?: string | null;
+  /** The portfolio's mix, which decides the default name (see defaultName). */
+  mix?: Record<string, number> | null;
   /** Save the new name ("" = back to the default). May throw. */
   onSave: (name: string) => void | Promise<void>;
   testId: string;
   className?: string;
 }) {
-  const shown = portfolioName(slot, customName);
+  const shown = portfolioName(slot, customName, mix);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -69,7 +92,7 @@ export default function PortfolioName({
           value={draft}
           maxLength={MAX_NAME}
           disabled={busy}
-          placeholder={`Portfolio ${slot}`}
+          placeholder={defaultName(slot, mix)}
           aria-label={`Name for portfolio ${slot}`}
           data-testid={`${testId}-input`}
           onChange={(e) => setDraft(e.target.value)}
