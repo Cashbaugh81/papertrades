@@ -30,8 +30,92 @@ function rank(hits, query) {
   const score = (h) => h.ticker === q ? 0 : h.ticker.startsWith(q) ? 1 : h.name.toUpperCase().startsWith(q) ? 2 : 3;
   return hits.map((h, i) => ({ h, i, s: score(h) })).sort((a, b) => a.s - b.s || a.i - b.i).map((x) => x.h);
 }
+var ALIASES = /* @__PURE__ */ (() => {
+  const alphabet = [
+    { ticker: "GOOGL", name: "Alphabet Inc (Google), Class A", assetType: "Stock" },
+    { ticker: "GOOG", name: "Alphabet Inc (Google), Class C", assetType: "Stock" }
+  ];
+  const meta = [{ ticker: "META", name: "Meta Platforms Inc (Facebook)", assetType: "Stock" }];
+  const spacex = [{ ticker: "SPCX", name: "Space Exploration Technologies Corp (SpaceX)", assetType: "Stock" }];
+  const berkshire = [
+    { ticker: "BRK-B", name: "Berkshire Hathaway Inc, Class B", assetType: "Stock" },
+    { ticker: "BRK-A", name: "Berkshire Hathaway Inc, Class A", assetType: "Stock" }
+  ];
+  const sp500 = [
+    { ticker: "VOO", name: "Vanguard S&P 500 ETF", assetType: "ETF" },
+    { ticker: "SPY", name: "SPDR S&P 500 ETF Trust", assetType: "ETF" },
+    { ticker: "IVV", name: "iShares Core S&P 500 ETF", assetType: "ETF" }
+  ];
+  const bitcoin = [
+    { ticker: "IBIT", name: "iShares Bitcoin Trust ETF", assetType: "ETF" },
+    { ticker: "FBTC", name: "Fidelity Wise Origin Bitcoin Fund", assetType: "ETF" }
+  ];
+  return {
+    google: alphabet,
+    youtube: alphabet,
+    alphabet,
+    facebook: meta,
+    instagram: meta,
+    whatsapp: meta,
+    spacex,
+    spaceexploration: spacex,
+    starlink: spacex,
+    berkshire,
+    berkshirehathaway: berkshire,
+    sp500,
+    snp500: sp500,
+    standardandpoors: sp500,
+    nasdaq: [{ ticker: "QQQ", name: "Invesco QQQ Trust (Nasdaq-100)", assetType: "ETF" }],
+    nasdaq100: [{ ticker: "QQQ", name: "Invesco QQQ Trust (Nasdaq-100)", assetType: "ETF" }],
+    dow: [{ ticker: "DIA", name: "SPDR Dow Jones Industrial Average ETF", assetType: "ETF" }],
+    dowjones: [{ ticker: "DIA", name: "SPDR Dow Jones Industrial Average ETF", assetType: "ETF" }],
+    totalmarket: [{ ticker: "VTI", name: "Vanguard Total Stock Market ETF", assetType: "ETF" }],
+    wholemarket: [{ ticker: "VTI", name: "Vanguard Total Stock Market ETF", assetType: "ETF" }],
+    bitcoin,
+    btc: bitcoin,
+    ethereum: [{ ticker: "ETHA", name: "iShares Ethereum Trust ETF", assetType: "ETF" }],
+    gold: [{ ticker: "GLD", name: "SPDR Gold Shares", assetType: "ETF" }],
+    coke: [{ ticker: "KO", name: "Coca-Cola Co", assetType: "Stock" }],
+    cocacola: [{ ticker: "KO", name: "Coca-Cola Co", assetType: "Stock" }],
+    mcdonalds: [{ ticker: "MCD", name: "McDonald's Corp", assetType: "Stock" }],
+    dominos: [{ ticker: "DPZ", name: "Domino's Pizza Inc", assetType: "Stock" }],
+    jnj: [{ ticker: "JNJ", name: "Johnson & Johnson", assetType: "Stock" }],
+    johnsonandjohnson: [{ ticker: "JNJ", name: "Johnson & Johnson", assetType: "Stock" }],
+    pg: [{ ticker: "PG", name: "Procter & Gamble Co", assetType: "Stock" }],
+    procterandgamble: [{ ticker: "PG", name: "Procter & Gamble Co", assetType: "Stock" }],
+    tsmc: [{ ticker: "TSM", name: "Taiwan Semiconductor Manufacturing Co (TSMC)", assetType: "Stock" }],
+    chipotle: [{ ticker: "CMG", name: "Chipotle Mexican Grill Inc", assetType: "Stock" }]
+  };
+})();
+function collapse(q) {
+  return q.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+function aliasHits(query) {
+  const c = collapse(query);
+  if (ALIASES[c]) return ALIASES[c];
+  const words = query.toLowerCase().split(/\s+/);
+  for (let n = words.length - 1; n >= 1; n--) {
+    const head = collapse(words.slice(0, n).join(" "));
+    if (head.length >= 4 && ALIASES[head]) return ALIASES[head];
+  }
+  return [];
+}
+function mergeHits(first, rest) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const h of [...first, ...rest]) {
+    if (seen.has(h.ticker)) continue;
+    seen.add(h.ticker);
+    out.push(h);
+  }
+  return out.slice(0, MAX_HITS);
+}
 export {
+  ALIASES,
   MAX_HITS,
+  aliasHits,
+  collapse,
+  mergeHits,
   normaliseQuery,
   parseSearch,
   rank
