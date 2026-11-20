@@ -4,10 +4,13 @@
 // Tiingo's search endpoint answers; each query is cached for 30 days, since
 // every Tiingo request counts against the free plan's 50 an hour. When Tiingo
 // can't answer (limit reached, outage), names seen before are searched instead.
+// Names people use that the listing doesn't ("google" → Alphabet, "space x" →
+// SpaceX) come first (ALIASES), and a query with spaces is also tried without
+// them ("space x" → "spacex").
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, json } from "../_shared/http.ts";
-import { MAX_HITS, normaliseQuery, parseSearch, rank } from "../_shared/search.js";
+import { aliasHits, collapse, MAX_HITS, mergeHits, normaliseQuery, parseSearch, rank } from "../_shared/search.js";
 
 type SearchHit = { ticker: string; name: string; assetType: string };
 
@@ -36,10 +39,25 @@ Deno.serve(async (req) => {
   const q = typeof body.query === "string" ? normaliseQuery(body.query) : undefined;
   if (!q) return json(req, { hits: [], source: "none" });
 
+  const found = await search(admin, token, q);
+  let hits: SearchHit[] = found.hits;
+  // "space x", "coca cola": try it run together too, if that looks like a different search.
+  const together = collapse(q);
+  if (q.includes(" ") && together !== q && together.length >= 2 && hits.length < MAX_HITS) {
+    hits = mergeHits(hits, (await search(admin, token, together)).hits);
+  }
+  return json(req, { hits: mergeHits(aliasHits(q), hits), source: found.source });
+});
+
+// deno-lint-ignore no-explicit-any
+type Admin = SupabaseClient<any, "public", any>;
+
+/** One query: the 30-day cache, else Tiingo, else names seen before. */
+async function search(admin: Admin, token: string, q: string): Promise<{ hits: SearchHit[]; source: string }> {
   // 1. Cached?
   const { data: cached } = await admin.from("symbol_search_cache").select("results, fetched_at").eq("query", q).maybeSingle();
   if (cached && Date.now() - Date.parse(cached.fetched_at as string) < CACHE_DAYS * 86_400_000) {
-    return json(req, { hits: cached.results, source: "cache" });
+    return { hits: cached.results as SearchHit[], source: "cache" };
   }
 
   // 2. Ask Tiingo.
@@ -55,7 +73,7 @@ Deno.serve(async (req) => {
         hits.map((h) => ({ ticker: h.ticker, name: h.name, asset_type: h.assetType, updated_at: new Date().toISOString() })),
       );
     }
-    return json(req, { hits, source: "tiingo" });
+    return { hits, source: "tiingo" };
   } catch (e) {
     console.log(`search "${q}": ${e instanceof Error ? e.message : e}; using saved names`);
   }
@@ -72,5 +90,5 @@ Deno.serve(async (req) => {
   const byTicker = new Map<string, SearchHit>();
   for (const r of sym.data ?? []) byTicker.set(r.ticker, { ticker: r.ticker, name: r.name, assetType: r.asset_type });
   for (const r of tick.data ?? []) if (!byTicker.has(r.ticker)) byTicker.set(r.ticker, { ticker: r.ticker, name: r.name ?? r.ticker, assetType: "" });
-  return json(req, { hits: rank([...byTicker.values()], q).slice(0, MAX_HITS), source: "saved" });
-});
+  return { hits: rank([...byTicker.values()], q).slice(0, MAX_HITS), source: "saved" };
+}
