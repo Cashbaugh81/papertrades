@@ -46,7 +46,8 @@ Deno.serve(async (req) => {
   if (q.includes(" ") && together !== q && together.length >= 2 && hits.length < MAX_HITS) {
     hits = mergeHits(hits, (await search(admin, token, together)).hits);
   }
-  return json(req, { hits: mergeHits(aliasHits(q), hits), source: found.source });
+  // Ranked here, not only when fetched, so saved searches follow today's ranking too.
+  return json(req, { hits: mergeHits(aliasHits(q), rank(hits, q)), source: found.source });
 });
 
 // deno-lint-ignore no-explicit-any

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aliasHits, mergeHits, normaliseQuery, parseSearch } from "@/server/search";
+import { aliasHits, mergeHits, nameCore, normaliseQuery, parseSearch, rank } from "@/server/search";
 
 describe("ticker search", () => {
   it("normalises queries for caching", () => {
@@ -47,5 +47,39 @@ describe("names people use that the listing doesn't", () => {
       { ticker: "GOOGL", name: "Alphabet Inc - Class A", assetType: "Stock" },
     ];
     expect(mergeHits(aliasHits("google"), tiingo).map((h) => h.ticker)).toEqual(["GOOGL", "GOOG", "UGOO"]);
+  });
+});
+
+describe("the company's main listing comes first", () => {
+  const hit = (ticker: string, name: string, assetType = "Stock") => ({ ticker, name, assetType });
+
+  it("puts TSLA above ZTSL and the Tesla funds", () => {
+    const tiingo = [
+      hit("ZTSL", "Tesla Inc"),
+      hit("TSLA", "Tesla Inc"),
+      hit("TXLZF", "Tesla Exploration Ltd"),
+      hit("YTSL", "Tesla (TSLA) Yield Shares Purpose ETF", "ETF"),
+      hit("TSHI", "Ninepoint Tesla HighShares ETF", "ETF"),
+      hit("TSLT", "T-REX 2X LONG TESLA DAILY TARGET ETF", "ETF"),
+    ];
+    expect(rank(tiingo, "tesla").map((h) => h.ticker).slice(0, 2)).toEqual(["TSLA", "ZTSL"]);
+    expect(rank(tiingo, "tesla").map((h) => h.ticker).indexOf("TXLZF")).toBeGreaterThan(1);
+  });
+
+  it("prefers the company named over others that start the same", () => {
+    const tiingo = [hit("APLE", "Apple Hospitality REIT Inc"), hit("AAPL", "Apple Inc")];
+    expect(rank(tiingo, "apple")[0].ticker).toBe("AAPL");
+  });
+
+  it("puts the plain listing above overseas OTC shares", () => {
+    const tiingo = [hit("NSRGY", "Nestle SA"), hit("NSRGF", "Nestle SA")];
+    expect(rank([hit("TOYOF", "Toyota Motor Corp"), hit("TM", "Toyota Motor Corp")], "toyota")[0].ticker).toBe("TM");
+    expect(rank(tiingo, "nestle").map((h) => h.ticker)).toEqual(["NSRGY", "NSRGF"]);
+  });
+
+  it("strips the legal bits from names", () => {
+    expect(nameCore("Tesla, Inc.")).toBe("tesla");
+    expect(nameCore("Alphabet Inc - Class A")).toBe("alphabet");
+    expect(nameCore("The Coca-Cola Co")).toBe("the coca cola");
   });
 });

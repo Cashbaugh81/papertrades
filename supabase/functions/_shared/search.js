@@ -25,10 +25,34 @@ function parseSearch(json, query) {
   }
   return rank(hits, query).slice(0, MAX_HITS);
 }
+function nameCore(name) {
+  let n = name.toLowerCase().replace(/[^a-z0-9& ]/g, " ").replace(/\s+/g, " ").trim();
+  n = n.replace(/\b(class|cl|series|ser) [a-z]$/, "").trim();
+  for (; ; ) {
+    const m = n.replace(/ (inc|incorporated|corp|corporation|co|company|ltd|limited|plc|sa|nv|ag|se|lp|llc|the)$/, "");
+    if (m === n) return n;
+    n = m.trim();
+  }
+}
+function oddness(h) {
+  const t = h.ticker;
+  const first = nameCore(h.name).charAt(0).toUpperCase();
+  let n = 0;
+  if (/^[A-Z]{5}$/.test(t) && /[FY]$/.test(t)) n += 2;
+  if (t.startsWith("Z") && first !== "Z") n += 2;
+  if (/[0-9]/.test(t)) n += 1;
+  if (first && t.charAt(0) !== first) n += 1;
+  return n;
+}
+var KIND_ORDER = { Stock: 0, ETF: 1, "Mutual Fund": 2 };
 function rank(hits, query) {
   const q = query.toUpperCase();
-  const score = (h) => h.ticker === q ? 0 : h.ticker.startsWith(q) ? 1 : h.name.toUpperCase().startsWith(q) ? 2 : 3;
-  return hits.map((h, i) => ({ h, i, s: score(h) })).sort((a, b) => a.s - b.s || a.i - b.i).map((x) => x.h);
+  const qc = collapse(query);
+  const bucket = (h) => h.ticker === q ? 0 : collapse(nameCore(h.name)) === qc ? 1 : h.ticker.startsWith(q) ? 2 : h.name.toUpperCase().startsWith(q) ? 3 : 4;
+  return hits.map((h, i) => ({ h, i, k: [bucket(h), KIND_ORDER[h.assetType] ?? 3, oddness(h), h.ticker.length] })).sort((a, b) => {
+    for (let j = 0; j < a.k.length; j++) if (a.k[j] !== b.k[j]) return a.k[j] - b.k[j];
+    return a.i - b.i;
+  }).map((x) => x.h);
 }
 var ALIASES = /* @__PURE__ */ (() => {
   const alphabet = [
@@ -116,7 +140,9 @@ export {
   aliasHits,
   collapse,
   mergeHits,
+  nameCore,
   normaliseQuery,
+  oddness,
   parseSearch,
   rank
 };
