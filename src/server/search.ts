@@ -39,14 +39,67 @@ export function parseSearch(json: unknown, query: string): SearchHit[] {
   return rank(hits, query).slice(0, MAX_HITS);
 }
 
-/** Exact ticker first, then tickers starting with the query, then names starting with it, then the rest. */
+/** A company name without the legal bits: "Tesla, Inc." → "tesla", "Alphabet Inc - Class A" → "alphabet". */
+export function nameCore(name: string): string {
+  let n = name.toLowerCase().replace(/[^a-z0-9& ]/g, " ").replace(/\s+/g, " ").trim();
+  n = n.replace(/\b(class|cl|series|ser) [a-z]$/, "").trim();
+  for (;;) {
+    const m = n.replace(/ (inc|incorporated|corp|corporation|co|company|ltd|limited|plc|sa|nv|ag|se|lp|llc|the)$/, "");
+    if (m === n) return n;
+    n = m.trim();
+  }
+}
+
+/**
+ * How unlike a company's main listing a ticker looks, 0 = normal. Search
+ * returns alternates under the same name (ZTSL as well as TSLA for "Tesla
+ * Inc"), and a beginner can't tell which is the real one, so these sink:
+ * five-letter tickers ending in F or Y (overseas over-the-counter shares and
+ * ADRs), a leading Z the name doesn't start with, digits, and tickers whose
+ * first letter isn't the name's.
+ */
+export function oddness(h: SearchHit): number {
+  const t = h.ticker;
+  const first = nameCore(h.name).charAt(0).toUpperCase();
+  let n = 0;
+  if (/^[A-Z]{5}$/.test(t) && /[FY]$/.test(t)) n += 2;
+  if (t.startsWith("Z") && first !== "Z") n += 2;
+  if (/[0-9]/.test(t)) n += 1;
+  if (first && t.charAt(0) !== first) n += 1;
+  return n;
+}
+
+const KIND_ORDER: Record<string, number> = { Stock: 0, ETF: 1, "Mutual Fund": 2 };
+
+/**
+ * Best match first:
+ * 1. the ticker typed exactly;
+ * 2. a company whose name is what was typed ("tesla" → Tesla Inc);
+ * 3. tickers starting with what was typed;
+ * 4. names starting with it;
+ * 5. the rest.
+ * Within each: stocks before funds, the normal-looking listing before
+ * alternates (see oddness), shorter tickers first, then search's own order.
+ */
 export function rank(hits: SearchHit[], query: string): SearchHit[] {
   const q = query.toUpperCase();
-  const score = (h: SearchHit) =>
-    h.ticker === q ? 0 : h.ticker.startsWith(q) ? 1 : h.name.toUpperCase().startsWith(q) ? 2 : 3;
+  const qc = collapse(query);
+  const bucket = (h: SearchHit) =>
+    h.ticker === q
+      ? 0
+      : collapse(nameCore(h.name)) === qc
+        ? 1
+        : h.ticker.startsWith(q)
+          ? 2
+          : h.name.toUpperCase().startsWith(q)
+            ? 3
+            : 4;
   return hits
-    .map((h, i) => ({ h, i, s: score(h) }))
-    .sort((a, b) => a.s - b.s || a.i - b.i)
+    .map((h, i) => ({ h, i, k: [bucket(h), KIND_ORDER[h.assetType] ?? 3, oddness(h), h.ticker.length] }))
+    .sort((a, b) => {
+      for (let j = 0; j < a.k.length; j++) if (a.k[j] !== b.k[j]) return a.k[j] - b.k[j];
+      return a.i - b.i;
+    })
     .map((x) => x.h);
 }
 
