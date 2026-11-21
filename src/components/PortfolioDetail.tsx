@@ -11,7 +11,8 @@ import type { PortfolioState, TimelineEvent } from "@/lib/types";
 
 /** Stock colours inside one portfolio: the dataviz reference categorical order (validated on white). */
 const STOCK_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
-const CASH_COLOR = "#cfc8bb";
+/** Cash as a line needs more ink than the light cash fill to stay visible. */
+const CASH_LINE = "#8a8172";
 
 export default function PortfolioDetail({
   state,
@@ -110,7 +111,7 @@ export default function PortfolioDetail({
           <h3 id="holdings-chart-title" className="text-[14px] font-medium">
             What it held, over time
           </h3>
-          <span className="micro">value of each holding and cash</span>
+          <span className="micro">each holding on its own line, from the day it was bought</span>
         </div>
         <HoldingsChart state={state} />
       </section>
@@ -219,10 +220,11 @@ function markerLabel(e: TimelineEvent): string {
 const MAX_POINTS = 360;
 
 /**
- * Stacked areas: each holding's value and the cash, so the top edge is the
- * portfolio's worth and the bands show what it was made of. Dashed lines mark
- * the start, mix changes, waits in cash and buy-ins. Hover (or tap) for the
- * values on a day.
+ * One line per holding, each on its own path: a stock's line starts on the day
+ * it was bought and ends if it's sold, so buying something new never looks like
+ * the others dipped. Cash (money set aside or not yet invested) is a dashed
+ * line while there is any. Dashed verticals mark the start, mix changes, waits
+ * in cash and buy-ins. Hover (or tap) for the values on a day.
  */
 function HoldingsChart({ state }: { state: PortfolioState }) {
   const box = useRef<HTMLDivElement>(null);
@@ -231,50 +233,65 @@ function HoldingsChart({ state }: { state: PortfolioState }) {
 
   const model = useMemo(() => {
     if (n < 2) return null;
-    // Tickers in the order they were first held; cash goes at the bottom.
+    // Tickers in the order they were first held; cash last.
     const tickers = Object.keys(state.byTicker).sort(
       (a, b) => state.byTicker[a].findIndex((v) => v > 0) - state.byTicker[b].findIndex((v) => v > 0) || (a < b ? -1 : 1),
     );
     const hasCash = state.cashSeries.some((c) => c > 0.5);
-    const layers = [
-      ...(hasCash ? [{ key: "Cash", color: CASH_COLOR, values: state.cashSeries }] : []),
-      ...tickers.map((t, i) => ({ key: t, color: STOCK_COLORS[i % STOCK_COLORS.length], values: state.byTicker[t] })),
+    const series = [
+      ...tickers.map((t, i) => ({ key: t, color: STOCK_COLORS[i % STOCK_COLORS.length], values: state.byTicker[t], dashed: false })),
+      ...(hasCash ? [{ key: "Cash", color: CASH_LINE, values: state.cashSeries, dashed: true }] : []),
     ];
     const step = Math.max(1, Math.ceil(n / MAX_POINTS));
-    const idx: number[] = [];
-    for (let i = 0; i < n; i += step) idx.push(i);
-    if (idx[idx.length - 1] !== n - 1) idx.push(n - 1);
-    const hi = Math.max(...state.values, 1);
-    return { layers, idx, hi };
+    // Each series is drawn only while it holds something: one piece per stretch,
+    // with its exact first and last day kept so a purchase starts where it happened.
+    const lines = series.map((s) => {
+      const pieces: number[][] = [];
+      let i = 0;
+      while (i < n) {
+        if ((s.values[i] ?? 0) <= 0.5) {
+          i++;
+          continue;
+        }
+        const from = i;
+        while (i < n && (s.values[i] ?? 0) > 0.5) i++;
+        const to = i - 1;
+        const pts = [from];
+        for (let k = Math.ceil((from + 1) / step) * step; k < to; k += step) pts.push(k);
+        if (to !== from) pts.push(to);
+        pieces.push(pts);
+      }
+      return { ...s, pieces };
+    });
+    const hi = Math.max(1, ...series.map((s) => Math.max(0, ...s.values)));
+    return { lines, hi: niceCeil(hi) };
   }, [state, n]);
 
   if (!model) return <p className="text-[13px] text-muted">The chart appears after the first close.</p>;
 
-  const { layers, idx, hi } = model;
+  const { lines, hi } = model;
   const W = 1000;
   const H = 260;
+  const PAD = 10; // room at the top so the highest line isn't clipped
   const x = (i: number) => (i / (n - 1)) * W;
-  const y = (v: number) => H - (v / hi) * (H - 8);
-  // Cumulative tops for each layer, at the sampled days.
-  const tops = layers.map((_, li) => idx.map((i) => layers.slice(0, li + 1).reduce((a, l) => a + (l.values[i] ?? 0), 0)));
-  const bands = layers.map((l, li) => {
-    const top = tops[li].map((v, k) => `${k ? "L" : "M"}${x(idx[k]).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
-    const base = (li ? tops[li - 1] : idx.map(() => 0))
-      .map((v, k) => [idx[k], v] as const)
-      .reverse()
-      .map(([i, v]) => `L${x(i).toFixed(1)} ${y(v).toFixed(1)}`)
-      .join(" ");
-    return { ...l, d: `${top} ${base} Z` };
-  });
+  const y = (v: number) => H - (v / hi) * (H - PAD);
+  const yPct = (v: number) => (y(v) / H) * 100;
+  const grid = [0.25, 0.5, 0.75, 1].map((f) => f * hi);
 
   // One line per day; events on the same day share it ("Start · SNOW in cash").
-  const markers: { i: number; key: string; label: string }[] = [];
+  const markers: { i: number; key: string; label: string; row: number }[] = [];
   for (const e of state.events) {
     const i = state.dates.indexOf(e.date);
     if (i < 0) continue;
     const same = markers.find((m) => m.i === i);
     if (same) same.label += ` · ${markerLabel(e)}`;
-    else markers.push({ i, key: `${e.kind}-${i}`, label: markerLabel(e) });
+    else markers.push({ i, key: `${e.kind}-${i}`, label: markerLabel(e), row: 0 });
+  }
+  // Labels too close to the previous one drop to a second row instead of overlapping.
+  for (let k = 1; k < markers.length; k++) {
+    const prev = markers[k - 1];
+    const gap = (markers[k].i - prev.i) / (n - 1);
+    if (gap < Math.min(0.35, prev.label.length * 0.009)) markers[k].row = prev.row ? 0 : 1;
   }
 
   const onMove = (clientX: number) => {
@@ -284,6 +301,7 @@ function HoldingsChart({ state }: { state: PortfolioState }) {
     setHover(Math.round(f * (n - 1)));
   };
   const h = hover;
+  const held = (l: { values: number[] }, i: number) => (l.values[i] ?? 0) > 0.5;
 
   return (
     <div>
@@ -300,20 +318,15 @@ function HoldingsChart({ state }: { state: PortfolioState }) {
           viewBox={`0 0 ${W} ${H}`}
           preserveAspectRatio="none"
           role="img"
-          aria-label={`What the portfolio held over time: ${layers.map((l) => l.key).join(", ")}. Worth ${money(state.value)} on ${humanDate(state.lastDate)}.`}
-          className="absolute inset-0 h-full w-full"
+          aria-label={`Value of each holding over time: ${lines
+            .map((l) => `${l.key} ${money(l.values[n - 1] ?? 0)}`)
+            .join(", ")} on ${humanDate(state.lastDate)}.`}
+          className="absolute inset-0 h-full w-full overflow-visible"
         >
-          {bands.map((b) => (
-            <path
-              key={b.key}
-              d={b.d}
-              fill={b.color}
-              fillOpacity={b.key === "Cash" ? 0.9 : 0.78}
-              stroke="#ffffff"
-              strokeWidth="1"
-              vectorEffect="non-scaling-stroke"
-            />
+          {grid.map((v) => (
+            <line key={v} x1={0} x2={W} y1={y(v)} y2={y(v)} stroke="#16191d" strokeOpacity="0.08" strokeWidth="1" vectorEffect="non-scaling-stroke" />
           ))}
+          <line x1={0} x2={W} y1={H} y2={H} stroke="#16191d" strokeOpacity="0.25" strokeWidth="1" vectorEffect="non-scaling-stroke" />
           {markers.map((m) => (
             <line
               key={m.key}
@@ -322,22 +335,74 @@ function HoldingsChart({ state }: { state: PortfolioState }) {
               y1={0}
               y2={H}
               stroke="#16191d"
-              strokeOpacity="0.55"
+              strokeOpacity="0.4"
               strokeWidth="1"
               strokeDasharray="3 4"
               vectorEffect="non-scaling-stroke"
             />
           ))}
+          {lines.map((l) =>
+            l.pieces.map((pts, k) => (
+              <path
+                key={`${l.key}-${k}`}
+                d={pts.map((i, j) => `${j ? "L" : "M"}${x(i).toFixed(1)} ${y(l.values[i]).toFixed(1)}`).join(" ")}
+                fill="none"
+                stroke={l.color}
+                strokeWidth="2"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                strokeDasharray={l.dashed ? "5 4" : undefined}
+                vectorEffect="non-scaling-stroke"
+                data-testid="detail-line"
+                data-series={l.key}
+                data-from={state.dates[pts[0]]}
+              />
+            )),
+          )}
           {h !== null && (
-            <line x1={x(h)} x2={x(h)} y1={0} y2={H} stroke="#16191d" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            <line x1={x(h)} x2={x(h)} y1={0} y2={H} stroke="#16191d" strokeOpacity="0.6" strokeWidth="1" vectorEffect="non-scaling-stroke" />
           )}
         </svg>
+
+        {/* Value scale on the left, quietly (not the top line, where the event labels sit). */}
+        {grid.slice(0, -1).map((v) => (
+          <span
+            key={`g-${v}`}
+            className="num pointer-events-none absolute left-0 -translate-y-full pb-0.5 text-[10px] text-muted"
+            style={{ top: `${yPct(v)}%` }}
+          >
+            {money(v)}
+          </span>
+        ))}
+
+        {/* A dot where each line starts (the day it was bought), and on hover. */}
+        {lines.map((l) =>
+          l.pieces.map((pts, k) => (
+            <span
+              key={`start-${l.key}-${k}`}
+              aria-hidden
+              className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-surface"
+              style={{ left: `${(pts[0] / (n - 1)) * 100}%`, top: `${yPct(l.values[pts[0]])}%`, borderColor: l.color }}
+            />
+          )),
+        )}
+        {h !== null &&
+          lines.map((l) =>
+            held(l, h) ? (
+              <span
+                key={`hover-${l.key}`}
+                aria-hidden
+                className="pointer-events-none absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-surface"
+                style={{ left: `${(h / (n - 1)) * 100}%`, top: `${yPct(l.values[h])}%`, background: l.color }}
+              />
+            ) : null,
+          )}
 
         {/* Marker labels along the top. */}
         {markers.map((m) => (
           <span
             key={`label-${m.key}`}
-            className={`pointer-events-none absolute top-0 whitespace-nowrap rounded-sm bg-surface/90 px-1 text-[10px] font-medium text-ink ${
+            className={`pointer-events-none absolute ${m.row ? "top-4" : "top-0"} whitespace-nowrap rounded-sm bg-surface/90 px-1 text-[10px] font-medium text-ink ${
               m.i / (n - 1) > 0.75 ? "-translate-x-full" : ""
             }`}
             style={{ left: `calc(${(m.i / (n - 1)) * 100}% ${m.i / (n - 1) > 0.75 ? "- 3px" : "+ 3px"})` }}
@@ -349,24 +414,25 @@ function HoldingsChart({ state }: { state: PortfolioState }) {
 
         {h !== null && (
           <div
-            className={`pointer-events-none absolute top-6 z-10 w-48 rounded-sm border border-rule bg-surface p-2 text-[12px] shadow-sm ${
+            className={`pointer-events-none absolute top-9 z-10 w-48 rounded-sm border border-rule bg-surface p-2 text-[12px] shadow-sm ${
               h / (n - 1) > 0.6 ? "-translate-x-full" : ""
             }`}
             style={{ left: `calc(${(h / (n - 1)) * 100}% ${h / (n - 1) > 0.6 ? "- 8px" : "+ 8px"})` }}
             role="status"
           >
             <div className="mb-1 font-medium">{humanDate(state.dates[h])}</div>
-            {[...layers].reverse().map((l) =>
-              (l.values[h] ?? 0) > 0.5 ? (
+            {[...lines]
+              .filter((l) => held(l, h))
+              .sort((a, b) => b.values[h] - a.values[h])
+              .map((l) => (
                 <div key={l.key} className="flex items-center justify-between gap-2">
                   <span className="flex items-center gap-1.5">
-                    <span aria-hidden className="inline-block size-2.5 rounded-[2px]" style={{ background: l.color }} />
+                    <Swatch color={l.color} dashed={l.dashed} />
                     {l.key}
                   </span>
                   <span className="num">{money(l.values[h])}</span>
                 </div>
-              ) : null,
-            )}
+              ))}
             <div className="mt-1 flex justify-between border-t border-rule pt-1 font-medium">
               <span>Worth</span>
               <span className="num">{money(state.values[h])}</span>
@@ -375,11 +441,11 @@ function HoldingsChart({ state }: { state: PortfolioState }) {
         )}
       </div>
 
-      {/* Key: every band, named, with its value now. */}
+      {/* Key: every line, named, with its value now. */}
       <ul className="m-0 mt-3 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-[12px]" data-testid="detail-legend">
-        {[...layers].reverse().map((l) => (
+        {lines.map((l) => (
           <li key={l.key} className="flex items-center gap-1.5">
-            <span aria-hidden className="inline-block size-2.5 rounded-[2px]" style={{ background: l.color }} />
+            <Swatch color={l.color} dashed={l.dashed} />
             <span className="text-ink">{l.key}</span>
             <span className="num text-muted">{money(l.values[n - 1] ?? 0)}</span>
           </li>
@@ -387,6 +453,22 @@ function HoldingsChart({ state }: { state: PortfolioState }) {
       </ul>
     </div>
   );
+}
+
+/** A short line in the series' colour, dashed for cash, matching the chart. */
+function Swatch({ color, dashed }: { color: string; dashed: boolean }) {
+  return (
+    <svg aria-hidden width="16" height="6" className="shrink-0">
+      <line x1="1" x2="15" y1="3" y2="3" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeDasharray={dashed ? "4 3" : undefined} />
+    </svg>
+  );
+}
+
+/** Round a chart's top up to a tidy number (1, 2, 2.5 or 5 × a power of ten). */
+function niceCeil(v: number): number {
+  const p = 10 ** Math.floor(Math.log10(v));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
 }
 
 function HoldingsTable({ state }: { state: PortfolioState }) {
