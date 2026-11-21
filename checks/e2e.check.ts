@@ -179,7 +179,7 @@ async function main() {
   check("cancelling an added portfolio removes the card", (await page.locator('[data-testid="col-5-empty"]').count()) === 0);
 
   // ---- replace a mix, finding tickers by name ------------------------------------------
-  await page.click('[data-testid="col-3"] button:has-text("Change mix")');
+  await page.click('[data-testid="col-3-open"]');
   await page.fill('[data-testid="edit-3-ticker-0"]', "netflix");
   check("typing a name offers its ticker", await page.locator('[data-testid="edit-3-ticker-0-hit-NFLX"]').waitFor({ timeout: 30_000 }).then(() => true, () => false));
   await page.click('[data-testid="edit-3-ticker-0-hit-NFLX"]');
@@ -194,11 +194,11 @@ async function main() {
   );
   await page.fill('[data-testid="edit-3-pct-0"]', "70");
   await waitForNoText(page, /checking…/, 45_000);
-  await page.click('[data-testid="col-3"] button:has-text("Replace mix")');
+  await page.click('[data-testid="col-3-save"]');
   check("a mix that doesn't add to 100 is refused", await waitForText(page, /add up to 120%, not 100%/, 10_000));
   await page.fill('[data-testid="edit-3-pct-0"]', "50");
   await page.fill('[data-testid="col-3"] input[placeholder^="Why?"]', "e2e: streaming instead");
-  await page.click('[data-testid="col-3"] button:has-text("Replace mix")');
+  await page.click('[data-testid="col-3-save"]');
   check("the portfolio restarts with the new mix", await waitForText(page, /DIS 50% · NFLX 50%/, 20_000));
   check("no pending sell-and-buy is shown", (await page.getByText(/Moving to .* at the next close/).count()) === 0);
   check("it starts at the same close as the others", await page.locator('[data-testid="col-3"]').getByText(/Waiting for the next market close/).isVisible());
@@ -243,7 +243,11 @@ async function main() {
   const gainBox = await page.locator('[data-testid="col-1-gain"]').boundingBox();
   check("the gain sits next to the worth", !!worthBox && !!gainBox && gainBox.x > worthBox.x + worthBox.width - 1 && Math.abs(gainBox.y + gainBox.height - (worthBox.y + worthBox.height)) < 12);
   const legend = await page.locator('[data-testid^="legend-"]').allInnerTexts();
-  check("the chart legend names portfolios by number", legend.length === 4 && legend.every((t, i) => t.includes(`Portfolio ${i + 1}`)), legend.join(" | "));
+  check(
+    "the chart legend names portfolios (portfolio 1 on VTI is the Baseline Market ETF)",
+    legend.length === 4 && legend[0].includes("Baseline Market ETF") && legend.slice(1).every((t, i) => t.includes(`Portfolio ${i + 2}`)),
+    legend.join(" | "),
+  );
   await page.locator('[data-testid^="legend-"]').nth(1).hover();
   const tip = await page.locator('[role="tooltip"]').innerText().catch(() => "");
   check("hovering a legend entry lists its mix", /NVDA\s+50%/.test(tip) && /SMH\s+50%/.test(tip), tip.replace(/\s+/g, " "));

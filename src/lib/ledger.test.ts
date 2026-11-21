@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { computeState } from "@/lib/ledger";
+import { computeState, heldOverAYear, taxOn } from "@/lib/ledger";
 import { closeInstant, nyDate } from "@/lib/market";
 import { buildIndex } from "@/lib/prices";
 import type { Portfolio, PriceBundle, Tx } from "@/lib/types";
@@ -426,4 +426,118 @@ describe("a stock that started trading after the start date", () => {
   function mix0(day: string): Tx {
     return { id: "m", kind: "rebalance", date: day, weights: { OLD: 1 } };
   }
+});
+
+describe("portfolio detail: costs, taxes, bumps, per-stock values, timeline", () => {
+  // 400 weekdays from 2024-01-01 (about 19 months). C: 100, then 150 from day 300. D: flat 100.
+  const days: string[] = [];
+  for (let d = new Date("2024-01-01T00:00:00Z"); days.length < 400; d = new Date(d.getTime() + 86_400_000)) {
+    if (d.getUTCDay() % 6 !== 0) days.push(d.toISOString().slice(0, 10));
+  }
+  const idx = buildIndex({
+    generated: "",
+    source: "tax",
+    series: {
+      C: { dates: days, closes: days.map((_, i) => (i < 300 ? 100 : 150)) },
+      D: { dates: days, closes: days.map(() => 100) },
+    },
+  });
+  const end = days[days.length - 1];
+  const mix = (id: string, date: string, weights: Record<string, number>): Tx => ({ id, kind: "rebalance", date, weights });
+
+  it("knows when a holding turns long-term (more than a year)", () => {
+    expect(heldOverAYear("2024-01-02", "2025-01-02")).toBe(false);
+    expect(heldOverAYear("2024-01-02", "2025-01-03")).toBe(true);
+  });
+
+  it("nets gains and losses like the IRS, at 24% short-term and 15% long-term", () => {
+    expect(taxOn(1_000, 2_000)).toBeCloseTo(240 + 300, 9);
+    expect(taxOn(-500, 2_000)).toBeCloseTo(1_500 * 0.15, 9);
+    expect(taxOn(500, -2_000)).toBe(0);
+    expect(taxOn(-100, -100)).toBe(0);
+  });
+
+  it("tracks cost basis, and the tax a sale today would owe on a long-held gain", () => {
+    const s = computeState(idx, pf({ startDate: days[0], initial: 10_000, tx: [mix("m", days[0], { C: 1 })] }), end);
+    expect(s.holdings[0]).toMatchObject({ ticker: "C", cost: 10_000 });
+    expect(s.taxes.unrealizedLong).toBeCloseTo(5_000, 6);
+    expect(s.taxes.unrealizedShort).toBeCloseTo(0, 6);
+    expect(s.taxes.potentialTax).toBeCloseTo(750, 6);
+    expect(s.taxes.actualTax).toBe(0);
+    expect(s.realized).toEqual([]);
+  });
+
+  it("a mix change sells what's held: the gain is realized and taxed", () => {
+    const s = computeState(
+      idx,
+      pf({ startDate: days[0], initial: 10_000, tx: [mix("m", days[0], { C: 1 }), mix("n", days[350], { D: 1 })] }),
+      end,
+    );
+    expect(s.realized).toHaveLength(1);
+    expect(s.realized[0]).toMatchObject({ ticker: "C", longTerm: true });
+    expect(s.realized[0].gain).toBeCloseTo(5_000, 6);
+    expect(s.taxes.actualTax).toBeCloseTo(750, 6);
+    expect(s.taxes.potentialTax).toBeCloseTo(0, 6); // D hasn't moved
+    expect(s.events.map((e) => e.kind)).toEqual(["start", "mix"]);
+  });
+
+  it("weekly buys are separate lots, so recent ones would be short-term", () => {
+    const s = computeState(idx, pf({ startDate: days[0], initial: 1_000, weekly: 100, tx: [mix("m", days[0], { C: 1 })] }), end);
+    const lots = s.lots.filter((l) => l.ticker === "C");
+    expect(lots.length).toBeGreaterThan(70);
+    // Buys after day 300 were at 150 and haven't moved: no gain on those.
+    expect(s.taxes.unrealizedShort).toBeGreaterThan(0); // weeks bought at 100 within the last year
+    expect(s.taxes.unrealizedLong).toBeGreaterThan(0);
+  });
+
+  it("finds the biggest bump and its dates", () => {
+    const s = computeState(idx, pf({ startDate: days[0], initial: 10_000, tx: [mix("m", days[0], { C: 1 })] }), end);
+    expect(s.maxRunUp).toBeCloseTo(0.5, 9);
+    expect(s.maxRunUpDates).toEqual([days[0], days[300]]);
+    expect(s.maxDrawdownDates).toBeUndefined();
+  });
+
+  it("records each stock's value and the cash, day by day", () => {
+    const s = computeState(
+      idx,
+      pf({ startDate: days[0], initial: 10_000, tx: [mix("m", days[0], { C: 1 }), mix("n", days[350], { D: 1 })] }),
+      end,
+    );
+    expect(s.byTicker.C).toHaveLength(s.dates.length);
+    expect(s.byTicker.D).toHaveLength(s.dates.length);
+    expect(s.byTicker.C[0]).toBeCloseTo(10_000, 6);
+    expect(s.byTicker.C[349]).toBeCloseTo(15_000, 6);
+    expect(s.byTicker.C[350]).toBe(0);
+    expect(s.byTicker.D[349]).toBe(0);
+    expect(s.byTicker.D[350]).toBeCloseTo(15_000, 6);
+    expect(s.cashSeries.every((c) => Math.abs(c) < 1e-6)).toBe(true);
+  });
+});
+
+describe("timeline for a stock that started trading later", () => {
+  const days = dates.slice(0, 120);
+  const idx = buildIndex({
+    generated: "",
+    source: "listing-timeline",
+    series: {
+      OLD: { dates: days, closes: days.map(() => 100) },
+      NEW: { dates: days.slice(40), closes: days.slice(40).map(() => 20) },
+    },
+  });
+  it("shows the start, the wait in cash, and the buy-in", () => {
+    const s = computeState(
+      idx,
+      pf({ startDate: days[0], initial: 10_000, tx: [{ id: "m", kind: "rebalance", date: days[0], weights: { OLD: 0.5, NEW: 0.5 } }] }),
+      days[119],
+    );
+    expect(s.events.map((e) => [e.kind, e.date])).toEqual([
+      ["start", days[0]],
+      ["waiting", days[0]],
+      ["bought_in", days[40]],
+    ]);
+    expect(s.cashSeries[0]).toBeCloseTo(5_000, 6);
+    expect(s.cashSeries[40]).toBeCloseTo(0, 6);
+    expect(s.byTicker.NEW[39]).toBe(0);
+    expect(s.byTicker.NEW[40]).toBeCloseTo(5_000, 6);
+  });
 });

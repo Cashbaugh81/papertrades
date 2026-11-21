@@ -63,17 +63,17 @@ await page.click('button:has-text("Start from today")');
 
 // ---- dashboard -------------------------------------------------------------------
 await page.getByText(/Live record/).waitFor({ timeout: 60_000 });
-check("portfolio 1 has no Change mix", (await page.locator('[data-testid="col-1"] button:has-text("Change mix")').count()) === 0);
+check("portfolio 1 opens to View only", (await page.innerText('[data-testid="col-1-open"]')) === "View");
 check("…and says why", await page.locator('[data-testid="col-1-locked"]').isVisible());
 check("a free account's portfolio 1 is called Baseline Market ETF", (await page.innerText('[data-testid="col-1-name"]')) === "Baseline Market ETF");
 check("…but can be cloned", await page.locator('[data-testid="col-1-clone"]').isVisible());
 check("the counter shows the free limit", /3\s*of\s*3/i.test(await page.innerText("#portfolios-title")));
 
-await page.click('[data-testid="col-2"] button:has-text("Change mix")');
+await page.click('[data-testid="col-2-open"]');
 await page.click('[data-testid="col-2"] button:has-text("Add another")');
 check("changing a mix: a fourth ticker asks for a paid account", await dialog().isVisible() && /up to 3 stocks/.test(await dialog().innerText()));
 await closeDialog();
-await page.click('[data-testid="col-2"] button:has-text("Cancel")');
+await page.click('[data-testid="col-2-cancel"]');
 
 await page.click('[data-testid="add-portfolio"]');
 check("+ for a fourth asks for a paid account", await dialog().isVisible() && /up to 3 portfolios/.test(await dialog().innerText()));
@@ -101,7 +101,7 @@ await page.screenshot({ path: "checks/out/upgrade-joined.png" });
 await page.click('[data-testid="upgrade-dialog"] button:has-text("Continue")');
 await dialog().waitFor({ state: "detached", timeout: 5_000 });
 check("the limits lift straight away", await page.getByText(/3\s*of\s*10/i).first().waitFor({ timeout: 10_000 }).then(() => true, () => false));
-check("…portfolio 1 can be changed now", await page.locator('[data-testid="col-1"] button:has-text("Change mix")').isVisible());
+check("…portfolio 1 can be changed now", (await page.innerText('[data-testid="col-1-open"]')) === "View/Edit");
 
 await page.click('[data-testid="col-2-clone"]');
 check("dashboard clone opens portfolio 4 with the same mix", await (async () => {

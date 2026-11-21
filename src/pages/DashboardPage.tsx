@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Copy, History, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { flushSync } from "react-dom";
+import { Copy, History, Plus, X } from "lucide-react";
 import MixEditor, { mixFromRows, rowsFromMix, type Row } from "@/components/MixEditor";
 import PathChart, { SERIES_COLORS } from "@/components/PathChart";
 import { ErrorNote, MAX_PORTFOLIOS } from "@/pages/SetupPage";
@@ -7,9 +8,11 @@ import type { ActiveSet, Column, Limits, Mix, TickerInfo } from "@/lib/api";
 import UpgradeDialog, { type UpgradeReason } from "@/components/UpgradeDialog";
 import LessonCards from "@/components/LessonCards";
 import PortfolioName, { portfolioName } from "@/components/PortfolioName";
+import Stat from "@/components/Stat";
+import PortfolioDetail from "@/components/PortfolioDetail";
 
 import { ordinal, rankTints, tintColors, type RankTint } from "@/lib/rankTint";
-import { humanDate, money, pct, signedPct } from "@/lib/ledger";
+import { humanDate, mixLabel, money, pct, signedPct } from "@/lib/ledger";
 import type { PortfolioState, Tx } from "@/lib/types";
 
 type Props = {
@@ -36,14 +39,6 @@ type Props = {
   onClone?: (fromSlot: number, mix: Mix | undefined) => void;
 };
 
-export function mixLabel(mix?: Mix): string {
-  if (!mix) return "—";
-  return Object.entries(mix)
-    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
-    .map(([t, w]) => `${t} ${Math.round(w * 1000) / 10}%`)
-    .join(" · ");
-}
-
 export default function DashboardPage(props: Props) {
   const { set, states, pricesThrough, onChangeDate, onStartOver } = props;
   const bySlot = new Map(set.columns.map((c) => [c.slot, c]));
@@ -53,6 +48,18 @@ export default function DashboardPage(props: Props) {
   // A clone opens the same add card, filled with the copied mix.
   const [adding, setAdding] = useState<{ slot: number; n: number; rows?: Row[]; from?: number } | null>(null);
   const [upgrade, setUpgrade] = useState<UpgradeReason | null>(null);
+  // The portfolio opened up across the grid (its slot), if any.
+  const [open, setOpenState] = useState<number | null>(null);
+  const setOpen = (slot: number | null) => withTransition(() => setOpenState(slot));
+  // Escape closes an open portfolio (unless a callout or dialog took it).
+  useEffect(() => {
+    if (open === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector('[role="dialog"]')) setOpen(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
   // Rank the portfolios that have started by return: greenest card is doing
   // best, reddest worst. Before the first close they're all equal: no tints.
   const tints = useMemo(() => {
@@ -165,14 +172,25 @@ export default function DashboardPage(props: Props) {
             Shaded by return: the greenest card is doing best, the reddest worst.
           </p>
         )}
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {shownSlots.map((slot) => {
             const col = bySlot.get(slot);
             return col ? (
-              <ColumnCard key={slot} {...cardProps} tint={tints.get(slot)} column={col} state={states.get(col.portfolio.id)!} baseline={slot === 1 ? undefined : baseline} />
+              <ColumnCard
+                key={slot}
+                {...cardProps}
+                tint={tints.get(slot)}
+                column={col}
+                state={states.get(col.portfolio.id)!}
+                baseline={slot === 1 ? undefined : baseline}
+                expanded={open === slot}
+                onOpen={() => setOpen(slot)}
+                onCloseDetail={() => setOpen(null)}
+              />
             ) : (
               <EmptyColumn
                 key={`${slot}-${adding?.slot === slot ? adding.n : 0}`}
+                transitionName={`pf-${slot}`}
                 {...cardProps}
                 slot={slot}
                 startOpen={adding?.slot === slot}
@@ -187,7 +205,7 @@ export default function DashboardPage(props: Props) {
       <UpgradeDialog reason={upgrade} onClose={() => setUpgrade(null)} onUpgraded={props.onUpgraded} />
 
       {/* ---- the paths -------------------------------------------------------- */}
-      <section>
+      <section style={transitionStyle("pf-paths")}>
         <div className="mb-3 flex items-baseline justify-between">
           <h2 className="text-[15px] font-medium">The paths</h2>
           <span className="micro">value of each portfolio over time</span>
@@ -203,7 +221,9 @@ export default function DashboardPage(props: Props) {
         </div>
       </section>
 
-      <DecisionLog set={set} states={states} onCancelTx={props.onCancelTx} />
+      <div style={transitionStyle("pf-log")}>
+        <DecisionLog set={set} states={states} onCancelTx={props.onCancelTx} />
+      </div>
     </div>
   );
 }
@@ -225,10 +245,22 @@ function ColumnCard({
   onUpgrade,
   onClone,
   tint,
-}: Props & { column: Column; state: PortfolioState; baseline?: PortfolioState; tint?: RankTint }) {
+  expanded = false,
+  onOpen,
+  onCloseDetail,
+}: Props & {
+  column: Column;
+  state: PortfolioState;
+  baseline?: PortfolioState;
+  tint?: RankTint;
+  /** Opened up across the grid, with the detail and the mix editor. */
+  expanded?: boolean;
+  onOpen?: () => void;
+  onCloseDetail?: () => void;
+}) {
   const locked = limits.lockFirst && column.slot === 1;
-  const [editing, setEditing] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
+  const card = useRef<HTMLElement>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -241,6 +273,31 @@ function ColumnCard({
   const startedLater = p.startDate !== set.startDate;
   const spread = baseline && !waitingToStart ? state.returnOnInvested - baseline.returnOnInvested : undefined;
 
+  // Opening fills the editor with the mix as it stands, and brings the card's top into view.
+  useEffect(() => {
+    if (!expanded) return;
+    setRows(rowsFromMix(pendingChange?.weights ?? mix));
+    setNote("");
+    setError(null);
+    const t = window.setTimeout(() => {
+      const top = card.current?.getBoundingClientRect().top ?? 0;
+      if (top < 0 || top > window.innerHeight * 0.4) {
+        card.current?.scrollIntoView({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+      }
+    }, 450);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded]);
+
+  /** The mix as typed differs from the one in force. */
+  const changed = (() => {
+    const r = mixFromRows(rows, info);
+    if (!r.mix || !mix) return rows.some((x) => x.ticker.trim());
+    const a = Object.entries(r.mix).sort();
+    const b = Object.entries(mix).sort();
+    return a.length !== b.length || a.some(([t, w], i) => t !== b[i][0] || Math.abs(w - b[i][1]) > 1e-9);
+  })();
+
   async function save() {
     const r = mixFromRows(rows, info); // the new mix replays from the start date
     if (!r.mix) return setError(r.problem ?? "Check the mix.");
@@ -248,8 +305,8 @@ function ColumnCard({
     setError(null);
     try {
       await onChangeMix(p.id, r.mix, note);
-      setEditing(false);
       setNote("");
+      onCloseDetail?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "That didn't save.");
     } finally {
@@ -259,10 +316,20 @@ function ColumnCard({
 
   return (
     <section
-      className="flex flex-col rounded-sm border border-rule bg-surface p-4 transition-colors duration-300"
-      style={tint ? tintColors(tint.t) : undefined}
+      ref={card}
+      className={`flex min-w-0 scroll-mt-20 flex-col rounded-sm border border-rule bg-surface transition-colors duration-300 ${
+        expanded ? "col-span-full p-5 shadow-[0_6px_24px_rgb(22_25_29_/_0.08)] md:p-7" : "cursor-pointer p-4 hover:border-ink/25"
+      }`}
+      style={{ ...(tint && !expanded ? tintColors(tint.t) : {}), ...transitionStyle(`pf-${column.slot}`) }}
       data-testid={`col-${column.slot}`}
       data-rank={tint?.rank}
+      data-expanded={expanded || undefined}
+      aria-label={expanded ? undefined : `${portfolioName(column.slot, column.customName, latestMix(column))}: open for details`}
+      onClick={(e) => {
+        // The whole tile opens it, except its own buttons, links and fields.
+        if (expanded || (e.target as HTMLElement).closest("button, a, input, label, [role='tooltip']")) return;
+        onOpen?.();
+      }}
     >
       <div className="flex items-baseline justify-between gap-2">
         <h2 className="flex min-w-0 flex-1 items-center gap-2 text-[14px] font-medium">
@@ -284,6 +351,18 @@ function ColumnCard({
             ? `portfolio ${column.slot}`
             : ""}
         </span>
+        {expanded && (
+          <button
+            type="button"
+            onClick={onCloseDetail}
+            aria-label="Close"
+            title="Close (Esc)"
+            data-testid={`col-${column.slot}-close`}
+            className="-mr-2 -mt-1 flex size-9 shrink-0 items-center justify-center self-start rounded-sm text-muted hover:bg-paper hover:text-ink"
+          >
+            <X size={18} aria-hidden />
+          </button>
+        )}
       </div>
       <div className="mt-0.5 text-[11px] text-muted" data-testid={`col-${column.slot}-mix`}>
         {mixLabel(mix)}
@@ -317,6 +396,11 @@ function ColumnCard({
         </div>
       </div>
 
+      {expanded ? (
+        <div className="mt-5 border-t border-rule pt-5">
+          <PortfolioDetail state={state} baseline={baseline} startDate={p.startDate} waitingToStart={waitingToStart} />
+        </div>
+      ) : (
       <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-rule pt-3 text-[12px]">
         <Stat label="Cash invested" value={money(state.invested)} />
         <Stat
@@ -337,6 +421,7 @@ function ColumnCard({
           <Stat label="Started" value={humanDate(p.startDate)} />
         )}
       </dl>
+      )}
 
       {waitingToStart && (
         <p className="mt-3 rounded-sm bg-paper px-2.5 py-2 text-[12px] leading-snug text-muted">
@@ -356,38 +441,71 @@ function ColumnCard({
       )}
 
       <div className="mt-auto pt-4">
-        {editing ? (
-          <div className="space-y-2 border-t border-rule pt-3">
-            <div className="micro">New mix</div>
-            <MixEditor
-              idPrefix={`edit-${column.slot}`}
-              rows={rows}
-              onChange={setRows}
-              info={info}
-              lookup={lookup}
-              suggestions={suggestions}
-              maxTickers={limits.maxTickers}
-              onLimit={limits.maxTickers < 8 ? () => onUpgrade?.("tickers") : undefined}
-              startDate={p.startDate}
-            />
-            <input
-              value={note}
-              maxLength={280}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Why? (optional, worth writing)"
-              className="w-full rounded-sm border border-rule bg-surface px-2.5 py-2 text-sm placeholder:text-muted/70"
-            />
-            <p className="text-[11px] leading-snug text-muted">
-              This portfolio restarts as if it had held the new mix since {humanDate(p.startDate)}, with the same
-              money going in. The old mix is noted in the decision log.
-            </p>
-            {error && <ErrorNote text={error} />}
-            <div className="flex gap-2">
-              <button onClick={save} disabled={busy} className="rounded-sm bg-accent px-3 py-1.5 text-[12px] font-medium text-paper disabled:opacity-50">
-                {busy ? "Saving…" : "Replace mix"}
+        {expanded ? (
+          <div className="mt-2 space-y-3 border-t border-rule pt-5" data-testid={`col-${column.slot}-editor`}>
+            <h3 className="text-[14px] font-medium">{locked ? "The mix" : "Edit the mix"}</h3>
+            {locked ? (
+              <p className="text-[12px] leading-snug text-muted" data-testid={`col-${column.slot}-locked`}>
+                Portfolio 1 is always the whole US market, so every comparison has the same yardstick.
+              </p>
+            ) : pendingChange ? (
+              <p className="text-[12px] leading-snug text-muted">
+                A change to {mixLabel(pendingChange.weights)} is waiting for the next close. Cancel it above to make a different one.
+              </p>
+            ) : (
+              <>
+                <div className="max-w-[560px] space-y-2">
+                  <MixEditor
+                    idPrefix={`edit-${column.slot}`}
+                    rows={rows}
+                    onChange={setRows}
+                    info={info}
+                    lookup={lookup}
+                    suggestions={suggestions}
+                    maxTickers={limits.maxTickers}
+                    onLimit={limits.maxTickers < 8 ? () => onUpgrade?.("tickers") : undefined}
+                    startDate={p.startDate}
+                  />
+                  <input
+                    value={note}
+                    maxLength={280}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="Why? (optional, worth writing)"
+                    className="w-full rounded-sm border border-rule bg-surface px-2.5 py-2 text-sm placeholder:text-muted/70"
+                  />
+                </div>
+                <p className="max-w-[560px] text-[11px] leading-snug text-muted">
+                  Saving restarts this portfolio as if it had held the new mix since {humanDate(p.startDate)}, with the same
+                  money going in. The old mix is noted in the decision log.
+                </p>
+                {error && <ErrorNote text={error} />}
+              </>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {!locked && !pendingChange && (
+                <button
+                  onClick={save}
+                  disabled={busy || !changed}
+                  className="rounded-sm bg-accent px-4 py-2 text-[13px] font-medium text-paper disabled:opacity-50"
+                  data-testid={`col-${column.slot}-save`}
+                >
+                  {busy ? "Saving…" : "Save changes"}
+                </button>
+              )}
+              <button
+                onClick={onCloseDetail}
+                className="rounded-sm border border-rule px-4 py-2 text-[13px] text-muted hover:border-ink/30 hover:text-ink"
+                data-testid={`col-${column.slot}-cancel`}
+              >
+                {locked || pendingChange || !changed ? "Close" : "Cancel"}
               </button>
-              <button onClick={() => setEditing(false)} className="px-2 text-[12px] text-muted underline underline-offset-2">
-                Cancel
+              <button
+                type="button"
+                onClick={() => onClone?.(column.slot, pendingChange?.weights ?? mix)}
+                disabled={!mix}
+                className="ml-auto flex items-center gap-1.5 rounded-sm border border-rule px-3 py-2 text-[13px] text-muted hover:border-ink/30 hover:text-ink disabled:opacity-40"
+              >
+                <Copy size={13} aria-hidden /> Clone
               </button>
             </div>
           </div>
@@ -399,26 +517,20 @@ function ColumnCard({
               </p>
             )}
             <div className="flex gap-2">
-              {!locked && (
-                <button
-                  onClick={() => {
-                    setRows(rowsFromMix(pendingChange?.weights ?? mix));
-                    setError(null);
-                    setEditing(true);
-                  }}
-                  disabled={!!pendingChange}
-                  className="flex-1 rounded-sm border border-rule px-3 py-1.5 text-[12px] text-muted hover:border-ink/30 hover:text-ink disabled:opacity-40"
-                >
-                  Change mix
-                </button>
-              )}
+              <button
+                onClick={onOpen}
+                className="flex-1 rounded-sm border border-rule px-3 py-1.5 text-[12px] text-muted hover:border-ink/30 hover:text-ink"
+                data-testid={`col-${column.slot}-open`}
+              >
+                {locked ? "View" : "View/Edit"}
+              </button>
               <button
                 type="button"
                 onClick={() => onClone?.(column.slot, pendingChange?.weights ?? mix)}
                 disabled={!mix}
                 title="Start a new portfolio with this mix, then adjust it"
                 data-testid={`col-${column.slot}-clone`}
-                className={`flex items-center justify-center gap-1.5 rounded-sm border border-rule px-3 py-1.5 text-[12px] text-muted hover:border-ink/30 hover:text-ink disabled:opacity-40 ${locked ? "flex-1" : ""}`}
+                className="flex items-center justify-center gap-1.5 rounded-sm border border-rule px-3 py-1.5 text-[12px] text-muted hover:border-ink/30 hover:text-ink disabled:opacity-40"
               >
                 <Copy size={13} aria-hidden /> Clone
               </button>
@@ -443,7 +555,15 @@ function EmptyColumn({
   onClose,
   limits,
   onUpgrade,
-}: Props & { slot: number; startOpen?: boolean; initialRows?: Row[]; copyOf?: number; onClose?: () => void }) {
+  transitionName,
+}: Props & {
+  slot: number;
+  startOpen?: boolean;
+  initialRows?: Row[];
+  copyOf?: number;
+  onClose?: () => void;
+  transitionName?: string;
+}) {
   const [open, setOpenState] = useState(startOpen);
   const setOpen = (o: boolean) => {
     setOpenState(o);
@@ -486,6 +606,7 @@ function EmptyColumn({
       }`}
       data-testid={`col-${slot}-empty`}
       data-flash={flash || undefined}
+      style={transitionName ? transitionStyle(transitionName) : undefined}
     >
       <div className="flex items-baseline justify-between">
         <h2 className="text-[14px] font-medium text-muted">Portfolio {slot}</h2>
@@ -531,59 +652,6 @@ function EmptyColumn({
         </button>
       )}
     </section>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  tone,
-  hint,
-  hintAlign = "left",
-}: {
-  label: string;
-  value: string;
-  tone?: "gain" | "loss";
-  hint?: string;
-  /** Which edge the callout lines up with; "right" for labels in the right-hand column. */
-  hintAlign?: "left" | "right";
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <dt className="text-muted">
-        {hint ? (
-          // Explained in a callout on hover, focus or tap.
-          <span className="relative inline-block">
-            <button
-              type="button"
-              className="cursor-help underline decoration-dotted decoration-[#b9b0a1] underline-offset-[3px] hover:text-ink"
-              onMouseEnter={() => setOpen(true)}
-              onMouseLeave={() => setOpen(false)}
-              onFocus={() => setOpen(true)}
-              onBlur={() => setOpen(false)}
-              onClick={() => setOpen(true)} // a tap also fires hover, so only open; tapping elsewhere closes it
-              aria-expanded={open}
-              aria-describedby={open ? `hint-${label}` : undefined}
-            >
-              {label}
-            </button>
-            {open && (
-              <span
-                id={`hint-${label}`}
-                role="tooltip"
-                className={`absolute bottom-full ${hintAlign === "right" ? "right-0" : "left-0"} z-20 mb-1.5 block w-56 max-w-[calc(100vw-3rem)] rounded-sm border border-rule bg-surface p-2.5 text-[12px] leading-snug text-ink shadow-sm`}
-              >
-                {hint}
-              </span>
-            )}
-          </span>
-        ) : (
-          label
-        )}
-      </dt>
-      <dd className={`num ${tone === "gain" ? "text-gain" : tone === "loss" ? "text-loss" : "text-ink"}`}>{value}</dd>
-    </div>
   );
 }
 
@@ -668,4 +736,23 @@ function lateNotes(state: PortfolioState): string[] {
 function latestMix(column: Column): Mix | undefined {
   const r = [...column.portfolio.tx].reverse().find((t) => t.kind === "rebalance");
   return r?.weights;
+}
+
+const prefersReducedMotion = () =>
+  typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/**
+ * Run a state change as a view transition where the browser has them: each
+ * card (named by transitionStyle) slides or grows from where it was to where
+ * it ends up. Elsewhere, or for people who ask for less motion, it just happens.
+ */
+function withTransition(change: () => void) {
+  const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown };
+  if (!doc.startViewTransition || prefersReducedMotion()) return change();
+  doc.startViewTransition(() => flushSync(change));
+}
+
+/** Names an element for view transitions (see the .pf rules in index.css). */
+function transitionStyle(name: string): CSSProperties {
+  return { viewTransitionName: name, viewTransitionClass: "pf" } as CSSProperties;
 }
