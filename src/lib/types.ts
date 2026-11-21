@@ -151,9 +151,59 @@ export type PortfolioState = {
   waiting: Record<string, number>;
   /** Stocks whose set-aside cash bought in later, and the day they did (their first trading day). */
   boughtIn: Record<string, string>;
+  /** Biggest bump: the largest rise from a low to a later high (0.4 = +40%), and those two days. */
+  maxRunUp: number;
+  maxRunUpDates?: [string, string];
+  /** The high and the later low that make the biggest drop. */
+  maxDrawdownDates?: [string, string];
+  /** Each holding's value at each close (aligned with `dates`; 0 when not held). */
+  byTicker: Record<string, number[]>;
+  /** Cash, including cash set aside for stocks not trading yet, at each close. */
+  cashSeries: number[];
+  /** Purchases still held. */
+  lots: Lot[];
+  /** Gains and losses from sales so far. */
+  realized: RealizedGain[];
+  taxes: TaxSummary;
+  /** What happened, in order (for the portfolio's timeline). */
+  events: TimelineEvent[];
   /** Orders that reached their close but could not be filled, by transaction id. */
   rejections: Record<string, { date: string; reason: string }>;
   lastDate: string;
   /** Trades that could not be filled (insufficient cash, no holding). Surfaced in the UI. */
   rejected: string[];
+};
+
+/** One purchase still held: for cost basis and whether its gain would be short- or long-term. */
+export type Lot = { ticker: string; date: string; units: number; cost: number };
+
+export type RealizedGain = {
+  ticker: string;
+  bought: string;
+  sold: string;
+  proceeds: number;
+  cost: number;
+  gain: number;
+  /** Held more than a year. */
+  longTerm: boolean;
+};
+
+export type TaxSummary = {
+  /** Gains (or losses) if everything were sold at the last close, by holding period. */
+  unrealizedShort: number;
+  unrealizedLong: number;
+  /** Tax those would owe, at 24% short-term / 15% long-term after netting. */
+  potentialTax: number;
+  /** Gains (or losses) from sales so far. */
+  realizedShort: number;
+  realizedLong: number;
+  actualTax: number;
+};
+
+export type TimelineEvent = {
+  date: string;
+  kind: "start" | "mix" | "waiting" | "bought_in" | "buy" | "sell";
+  weights?: Record<string, number>;
+  tickers?: string[];
+  amount?: number;
 };

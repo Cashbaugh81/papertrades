@@ -171,6 +171,41 @@ function seriesToBundle(rows, source = "supabase") {
 }
 
 // src/lib/ledger.ts
+function addLot(book, ticker, day, units, cost) {
+  if (!(units > 0)) return;
+  const list = book.lots.get(ticker) ?? [];
+  list.push({ ticker, date: day, units, cost });
+  book.lots.set(ticker, list);
+}
+function heldOverAYear(bought, sold) {
+  const [y, m, d] = bought.split("-").map(Number);
+  const anniversary = `${String(y + 1).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return sold > anniversary;
+}
+function sellLots(book, ticker, units, px, day) {
+  const list = book.lots.get(ticker) ?? [];
+  let left = units;
+  while (left > 1e-12 && list.length) {
+    const lot = list[0];
+    const take = Math.min(left, lot.units);
+    const cost = lot.cost * (take / lot.units);
+    book.realized.push({
+      ticker,
+      bought: lot.date,
+      sold: day,
+      proceeds: take * px,
+      cost,
+      gain: take * px - cost,
+      longTerm: heldOverAYear(lot.date, day)
+    });
+    lot.units -= take;
+    lot.cost -= cost;
+    left -= take;
+    if (lot.units <= 1e-12) list.shift();
+  }
+  if (list.length) book.lots.set(ticker, list);
+  else book.lots.delete(ticker);
+}
 function listedBy(index, ticker, day) {
   return closeOn(index, ticker, day) !== void 0;
 }
@@ -234,7 +269,9 @@ function applyRebalance(index, book, tx, day) {
   let total = book.cash + waitingTotal(book);
   for (const [t, u] of book.units) {
     if (u <= 1e-12) continue;
-    total += u * (closeOn(index, t, day) ?? 0);
+    const px = closeOn(index, t, day) ?? 0;
+    total += u * px;
+    sellLots(book, t, u, px, day);
   }
   book.units = /* @__PURE__ */ new Map();
   book.waiting = /* @__PURE__ */ new Map();
@@ -242,8 +279,10 @@ function applyRebalance(index, book, tx, day) {
   const weights = tx.weights ?? {};
   for (const [t, w] of Object.entries(weights)) {
     const px = index.close(t, day);
-    if (px !== void 0 && px > 0) book.units.set(t, total * w / px);
-    else book.waiting.set(t, total * w);
+    if (px !== void 0 && px > 0) {
+      book.units.set(t, total * w / px);
+      addLot(book, t, day, total * w / px, total * w);
+    } else book.waiting.set(t, total * w);
   }
   book.weights = weights;
   const waited = [...book.waiting.keys()].sort();
@@ -265,6 +304,7 @@ function applyOrder(book, tx, day, px) {
     const units2 = spend / px;
     book.cash -= spend;
     book.units.set(tx.ticker, (book.units.get(tx.ticker) ?? 0) + units2);
+    addLot(book, tx.ticker, day, units2, spend);
     return { date: day, price: px, units: units2, amount: spend };
   }
   const held = book.units.get(tx.ticker) ?? 0;
@@ -275,6 +315,7 @@ function applyOrder(book, tx, day, px) {
     return void 0;
   }
   book.cash += units * px;
+  sellLots(book, tx.ticker, units, px, day);
   const left = held - units;
   book.units.set(tx.ticker, left < 1e-9 ? 0 : left);
   return { date: day, price: px, units, amount: units * px };
@@ -292,6 +333,7 @@ function deployContribution(index, book, day, amount, weights) {
       continue;
     }
     book.units.set(ticker, (book.units.get(ticker) ?? 0) + spend / px);
+    addLot(book, ticker, day, spend / px, spend);
   }
 }
 function eventKey(tx) {
@@ -300,7 +342,17 @@ function eventKey(tx) {
 function computeState(index, p, endDate) {
   const start = p.startDate;
   const dates = index.calendar.filter((d) => d >= start && d <= endDate);
-  const book = { units: /* @__PURE__ */ new Map(), cash: 0, rejected: [], weights: p.weights, waiting: /* @__PURE__ */ new Map() };
+  const book = {
+    units: /* @__PURE__ */ new Map(),
+    cash: 0,
+    rejected: [],
+    weights: p.weights,
+    waiting: /* @__PURE__ */ new Map(),
+    lots: /* @__PURE__ */ new Map(),
+    realized: []
+  };
+  const byTicker = {};
+  const cashSeries = [];
   const boughtIn = {};
   const fills = {};
   const rejections = {};
@@ -349,6 +401,7 @@ function computeState(index, p, endDate) {
       const px = index.close(t, day);
       if (px === void 0 || !(px > 0)) continue;
       book.units.set(t, (book.units.get(t) ?? 0) + amt / px);
+      addLot(book, t, day, amt / px, amt);
       book.waiting.delete(t);
       boughtIn[t] = day;
     }
@@ -394,6 +447,13 @@ function computeState(index, p, endDate) {
       if (px !== void 0) holdingsValue += units * px;
     }
     values.push(holdingsValue + book.cash + waitingTotal(book));
+    cashSeries.push(book.cash + waitingTotal(book));
+    for (const [ticker, units] of book.units) {
+      if (units <= 1e-9 && !byTicker[ticker]) continue;
+      const arr = byTicker[ticker] ??= new Array(i).fill(0);
+      arr.push(units > 1e-9 ? units * (closeOn(index, ticker, day) ?? 0) : 0);
+    }
+    for (const arr of Object.values(byTicker)) if (arr.length < i + 1) arr.push(0);
   }
   if (dates.length === 0) {
     if (p.initial > 0) {
@@ -425,6 +485,23 @@ function computeState(index, p, endDate) {
     peak = Math.max(peak, v);
     drawdownSeries.push(peak > 0 ? v / peak - 1 : 0);
   }
+  let maxRunUp = 0;
+  let runFrom = 0;
+  let runTo = 0;
+  let low = Infinity;
+  let lowAt = 0;
+  twrIndex.forEach((v, i) => {
+    if (v < low) {
+      low = v;
+      lowAt = i;
+    }
+    const up = low > 0 ? v / low - 1 : 0;
+    if (up > maxRunUp) {
+      maxRunUp = up;
+      runFrom = lowAt;
+      runTo = i;
+    }
+  });
   const mean = rets.length ? rets.reduce((a, b) => a + b, 0) / rets.length : 0;
   const variance = rets.length > 1 ? rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1) : 0;
   const volatility = Math.sqrt(variance) * Math.sqrt(252);
@@ -437,7 +514,8 @@ function computeState(index, p, endDate) {
     const px = closeOn(index, ticker, finalDay) ?? 0;
     const v = units * px;
     totalHoldings += v;
-    holdings.push({ ticker, units, price: px, value: v, weight: 0, cost: 0 });
+    const cost = (book.lots.get(ticker) ?? []).reduce((a, l) => a + l.cost, 0);
+    holdings.push({ ticker, units, price: px, value: v, weight: 0, cost });
   }
   for (const h of holdings) {
     h.weight = totalHoldings > 0 ? h.value / totalHoldings : 0;
@@ -478,8 +556,92 @@ function computeState(index, p, endDate) {
     rejections,
     currentWeights: book.weights,
     waiting: Object.fromEntries(book.waiting),
-    boughtIn
+    boughtIn,
+    maxRunUp,
+    maxRunUpDates: twrIndex.length ? [dates[runFrom], dates[runTo]] : void 0,
+    maxDrawdownDates: drawdownDates(twrIndex, dates),
+    byTicker,
+    cashSeries,
+    lots: [...book.lots.values()].flat().map((l) => ({ ...l })),
+    realized: book.realized,
+    taxes: taxSummary(index, [...book.lots.values()].flat(), book.realized, finalDay),
+    events: timeline(p, fills, boughtIn)
   };
+}
+function drawdownDates(twr, dates) {
+  if (!twr.length) return void 0;
+  let peak = twr[0];
+  let peakAt = 0;
+  let worst = 0;
+  let from = 0;
+  let to = 0;
+  twr.forEach((v, i) => {
+    if (v > peak) {
+      peak = v;
+      peakAt = i;
+    }
+    const dd = peak > 0 ? v / peak - 1 : 0;
+    if (dd < worst) {
+      worst = dd;
+      from = peakAt;
+      to = i;
+    }
+  });
+  return worst < 0 ? [dates[from], dates[to]] : void 0;
+}
+var TAX_RATES = { longTerm: 0.15, shortTerm: 0.24 };
+function taxOn(shortTerm, longTerm) {
+  let st = shortTerm;
+  let lt = longTerm;
+  if (st < 0 && lt > 0) {
+    lt += st;
+    st = 0;
+  } else if (lt < 0 && st > 0) {
+    st += lt;
+    lt = 0;
+  }
+  return Math.max(0, st) * TAX_RATES.shortTerm + Math.max(0, lt) * TAX_RATES.longTerm;
+}
+function taxSummary(index, lots, realized, day) {
+  let unrealizedShort = 0;
+  let unrealizedLong = 0;
+  for (const l of lots) {
+    const gain = l.units * (closeOn(index, l.ticker, day) ?? 0) - l.cost;
+    if (heldOverAYear(l.date, day)) unrealizedLong += gain;
+    else unrealizedShort += gain;
+  }
+  let realizedShort = 0;
+  let realizedLong = 0;
+  for (const r of realized) {
+    if (r.longTerm) realizedLong += r.gain;
+    else realizedShort += r.gain;
+  }
+  return {
+    unrealizedShort,
+    unrealizedLong,
+    potentialTax: taxOn(unrealizedShort, unrealizedLong),
+    realizedShort,
+    realizedLong,
+    actualTax: taxOn(realizedShort, realizedLong)
+  };
+}
+function timeline(p, fills, boughtIn) {
+  const out = [];
+  let first = true;
+  for (const tx of p.tx) {
+    const f = fills[tx.id];
+    if (!f) continue;
+    if (tx.kind === "rebalance") {
+      out.push({ date: f.date, kind: first ? "start" : "mix", weights: tx.weights, amount: f.amount });
+      if (f.waited?.length) out.push({ date: f.date, kind: "waiting", tickers: f.waited });
+      first = false;
+    } else if (tx.kind === "buy" || tx.kind === "sell") {
+      out.push({ date: f.date, kind: tx.kind, tickers: [tx.ticker], amount: f.amount });
+    }
+  }
+  for (const [t, day] of Object.entries(boughtIn)) out.push({ date: day, kind: "bought_in", tickers: [t] });
+  const order = { start: 0, waiting: 1, mix: 2, buy: 3, sell: 3, bought_in: 4 };
+  return out.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : order[a.kind] - order[b.kind]);
 }
 
 // src/server/settle.ts

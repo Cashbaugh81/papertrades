@@ -85,18 +85,18 @@ check("names survive a reload", (await nameOf(2)) === "Big tech" && (await nameO
 check("…and show in the decision log", (await page.locator("section:has(h2:has-text('Decisions'))").innerText()).includes("My picks"));
 
 // Changing the mix keeps the name.
-await page.click('[data-testid="col-3"] button:has-text("Change mix")');
+await page.click('[data-testid="col-3-open"]');
 await page.fill('[data-testid="edit-3-ticker-0"]', "SPY");
 await settle();
-await page.click('[data-testid="col-3"] button:has-text("Replace mix")');
+await page.click('[data-testid="col-3-save"]');
 await page.locator('[data-testid="col-3-mix"]:has-text("SPY")').waitFor({ timeout: 20_000 });
 check("changing the mix keeps the name", (await nameOf(3)) === "My picks");
 
 // A paid account changing portfolio 1 away from VTI: its default name becomes "Portfolio 1".
-await page.click('[data-testid="col-1"] button:has-text("Change mix")');
+await page.click('[data-testid="col-1-open"]');
 await page.fill('[data-testid="edit-1-ticker-0"]', "QQQ");
 await settle();
-await page.click('[data-testid="col-1"] button:has-text("Replace mix")');
+await page.click('[data-testid="col-1-save"]');
 await page.locator('[data-testid="col-1-mix"]:has-text("QQQ")').waitFor({ timeout: 20_000 });
 check("portfolio 1 off VTI is called Portfolio 1", (await nameOf(1)) === "Portfolio 1");
 check("…in the chart legend too", (await page.getByText("Baseline Market ETF").count()) === 0);

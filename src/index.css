@@ -138,3 +138,33 @@
 @media (prefers-reduced-motion: reduce) {
   .lesson-in-r, .lesson-in-l { animation: none; }
 }
+
+/*
+ * Opening and closing a portfolio (DashboardPage withTransition): every card
+ * is named, so the browser animates each from its old box to its new one.
+ * The opened card's snapshots keep their real size, pinned to the top left,
+ * and the growing box clips them, so it grows right and down rather than
+ * stretching; the cards after it slide down (or back up).
+ */
+::view-transition-group(*.pf) {
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(0.2, 0.7, 0.2, 1);
+  overflow: clip;
+}
+::view-transition-old(*.pf),
+::view-transition-new(*.pf) {
+  height: 100%;
+  width: 100%;
+  object-fit: none;
+  object-position: left top;
+}
+::view-transition-old(*.pf) {
+  animation-duration: 200ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
