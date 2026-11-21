@@ -71,6 +71,16 @@ const markers = await page.locator('[data-testid="col-2"] [data-testid="detail-m
 check("the chart marks the start, SNOW's wait and its buy-in", markers.includes("Start · SNOW in cash") && markers.includes("SNOW bought"), markers.join(" | "));
 const legend = await page.innerText('[data-testid="col-2"] [data-testid="detail-legend"]');
 check("the key names each holding", /QQQ/.test(legend) && /SNOW/.test(legend));
+// One line per holding, each starting the day it was bought.
+const lines = await page.locator('[data-testid="col-2"] [data-testid="detail-line"]').evaluateAll((els) =>
+  els.map((e) => ({ series: e.getAttribute("data-series"), from: e.getAttribute("data-from") })),
+);
+const lineFrom = (s: string) => lines.find((l) => l.series === s)?.from;
+check("QQQ's line starts at the start date", lineFrom("QQQ") === "2015-01-02", JSON.stringify(lines));
+check("SNOW's line starts the day it was bought", lineFrom("SNOW") === "2020-09-16", String(lineFrom("SNOW")));
+check("cash is its own line, while it waited", lineFrom("Cash") === "2015-01-02");
+const labels = await page.locator('[data-testid="col-2"] [data-testid="detail-marker"]').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
+check("marker labels don't overlap", labels.every((a, i) => labels.every((c, j) => i >= j || a.right <= c.left || c.right <= a.left || a.bottom <= c.top || c.bottom <= a.top)));
 check("the holdings table lists both", /QQQ/.test(await page.innerText('[data-testid="col-2"] [data-testid="detail-holdings"]')) && /SNOW/.test(await page.innerText('[data-testid="col-2"] [data-testid="detail-holdings"]')));
 const timeline = await page.innerText('[data-testid="col-2"] [data-testid="detail-timeline"]');
 check("the timeline tells the story", /Bought QQQ 50% · SNOW 50%/.test(timeline) && /SNOW started trading/.test(timeline), timeline.replace(/\n/g, " / "));
