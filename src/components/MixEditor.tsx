@@ -1,36 +1,59 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
-import type { Mix, TickerInfo } from "@/lib/api";
-import { humanDate } from "@/lib/ledger";
+import { pricesOn, type Mix, type StartPrice, type TickerInfo } from "@/lib/api";
+import { humanDate, money } from "@/lib/ledger";
 import TickerField from "@/components/TickerField";
 
 const TICKER_RE = /^[A-Z0-9][A-Z0-9.-]{0,11}$/;
 const MAX_ROWS = 8;
+/** Number boxes without the browser's up/down arrows, which take room the digits need. */
+const NOSPIN = "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
 
-export type Row = { ticker: string; pct: string };
+/**
+ * One line of a mix. A row is set either by percentage or by shares:
+ * - `shares` undefined: the percentage was typed; shares are shown worked out from it.
+ * - `shares` set: a number of shares was typed (or "" for a reopened mix that keeps
+ *   cash back); `exact` is its unrounded percentage at the start-date price, and
+ *   `pct` the rounded one shown. A mix with any share row may add up to less than
+ *   100%: the rest stays in cash.
+ */
+export type Row = { ticker: string; pct: string; shares?: string; exact?: number };
 
 export function rowsFromMix(mix?: Mix): Row[] {
   if (!mix || Object.keys(mix).length === 0) return [{ ticker: "", pct: "100" }];
+  // A mix that keeps cash back was made with shares; reopen it that way so it saves as it was.
+  const keepsCash = Object.values(mix).reduce((a, w) => a + w, 0) < 1 - 1e-6;
   return Object.entries(mix)
     .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
-    .map(([ticker, w]) => ({ ticker, pct: String(Math.round(w * 10000) / 100) }));
+    .map(([ticker, w]) =>
+      keepsCash
+        ? { ticker, pct: String(Math.round(w * 10000) / 100), shares: "", exact: w * 100 }
+        : { ticker, pct: String(Math.round(w * 10000) / 100) },
+    );
 }
+
+/** Rows that buy by shares rather than by percentage (so the mix may keep cash). */
+export const usesShares = (rows: Row[]) => rows.some((r) => r.shares !== undefined);
+
+/** Shares to show for a dollar amount at a price: up to 3 decimals, no trailing zeros. */
+export const shareText = (n: number) => (Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : "");
 
 /**
  * The mix the rows describe, or a reason it isn't one yet. Tickers must have
  * been looked up and found. A stock that started trading after the start date
  * is fine: its share waits in cash until its first trading day (see ledger).
  */
-export function mixFromRows(rows: Row[], info: Record<string, TickerInfo>): { mix?: Mix; problem?: string } {
-  const filled = rows.filter((r) => r.ticker.trim() || r.pct.trim());
+export function mixFromRows(rows: Row[], info: Record<string, TickerInfo>, amount?: number): { mix?: Mix; problem?: string } {
+  const filled = rows.filter((r) => r.ticker.trim() || r.pct.trim() || r.shares?.trim());
+  const byShares = usesShares(filled);
   if (filled.length === 0) return { problem: "Add at least one investment." };
   const mix: Mix = {};
   let total = 0;
   for (const r of filled) {
     const t = r.ticker.trim().toUpperCase();
-    const p = Number(r.pct);
+    const p = r.shares !== undefined && r.exact !== undefined ? r.exact : Number(r.pct);
     if (!TICKER_RE.test(t)) return { problem: t ? `${t} isn't a ticker.` : "Every row needs a ticker." };
-    if (!(p > 0)) return { problem: `Give ${t} a percentage above zero.` };
+    if (!(p > 0)) return { problem: r.shares !== undefined ? `Give ${t} a number of shares above zero.` : `Give ${t} a percentage above zero.` };
     if (mix[t]) return { problem: `${t} is listed twice.` };
     const i = info[t];
     if (!i) return { problem: `Checking ${t}…` };
@@ -39,7 +62,14 @@ export function mixFromRows(rows: Row[], info: Record<string, TickerInfo>): { mi
     mix[t] = p;
     total += p;
   }
-  if (Math.abs(total - 100) > 0.01) return { problem: `The percentages add up to ${round2(total)}%, not 100%.` };
+  if (byShares) {
+    if (total > 100.01)
+      return {
+        problem: amount
+          ? `That's ${money(((total - 100) / 100) * amount)} more than the ${money(amount)} you start with.`
+          : `The percentages add up to ${round2(total)}%, more than 100%.`,
+      };
+  } else if (Math.abs(total - 100) > 0.01) return { problem: `The percentages add up to ${round2(total)}%, not 100%.` };
   return { mix: Object.fromEntries(Object.entries(mix).map(([t, p]) => [t, p / 100])) };
 }
 
@@ -59,7 +89,7 @@ export function evenSplit(n: number): string[] {
 /** The same rows, with their percentages reset to an even split. */
 export function spreadEvenly(rows: Row[]): Row[] {
   const pcts = evenSplit(rows.length);
-  return rows.map((r, i) => ({ ...r, pct: pcts[i] }));
+  return rows.map(({ ticker }, i) => ({ ticker, pct: pcts[i] }));
 }
 
 type Props = {
@@ -79,6 +109,9 @@ type Props = {
   locked?: boolean;
   /** The day the money goes in: a stock that started trading later gets a note that its share waits in cash. */
   startDate?: string;
+  /** The starting amount and the day it buys at: together they turn on the Shares column. */
+  amount?: number;
+  priceDate?: string;
 };
 
 /** Rows of ticker + percentage. Unknown tickers are looked up as they're typed. */
@@ -92,8 +125,32 @@ export default function MixEditor({
   onLimit,
   locked = false,
   startDate,
+  amount,
+  priceDate,
 }: Props) {
-  const total = useMemo(() => rows.reduce((a, r) => a + (Number(r.pct) || 0), 0), [rows]);
+  const pctOf = (r: Row) => (r.shares !== undefined && r.exact !== undefined ? r.exact : Number(r.pct) || 0);
+  const total = useMemo(() => rows.reduce((a, r) => a + pctOf(r), 0), [rows]);
+  const byShares = usesShares(rows);
+  const showShares = !!amount && amount > 0 && !!priceDate;
+
+  // The price each ticker buys at on the start date, for the Shares column.
+  const [prices, setPrices] = useState<Record<string, StartPrice>>({});
+  const okTickers = rows
+    .map((r) => r.ticker.trim().toUpperCase())
+    .filter((t) => info[t]?.status === "ok")
+    .sort()
+    .join(",");
+  useEffect(() => {
+    if (!showShares || !okTickers) return;
+    let alive = true;
+    pricesOn(okTickers.split(","), priceDate!)
+      .then((p) => alive && setPrices((old) => ({ ...old, ...Object.fromEntries(Object.entries(p).map(([t, v]) => [`${t}|${priceDate}`, v])) })))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [showShares, okTickers, priceDate]);
+  const priceOf = (t: string): StartPrice | undefined => prices[`${t}|${priceDate}`];
   const [asked, setAsked] = useState<Set<string>>(() => new Set());
   // Rows whose search is still running.
   const [searching, setSearching] = useState<Set<number>>(() => new Set());
@@ -125,13 +182,56 @@ export default function MixEditor({
   const set = (i: number, patch: Partial<Row>) =>
     onChange(latestRows.current.map((r, k) => (k === i ? { ...r, ...patch } : r)));
 
+  /** A share row's percentage at the current price and amount. */
+  const sharePct = (t: string, shares: string): number | undefined => {
+    const px = priceOf(t)?.close;
+    const n = Number(shares);
+    if (!px || !amount || !(n >= 0) || shares.trim() === "") return undefined;
+    return ((n * px) / amount) * 100;
+  };
+  const setShares = (i: number, shares: string) => {
+    const t = latestRows.current[i].ticker.trim().toUpperCase();
+    const exact = sharePct(t, shares);
+    set(i, { shares, exact: exact ?? 0, pct: exact === undefined ? "" : String(round2(exact)) });
+  };
+  // Typed shares follow the price: if the start date or amount changes, so does their percentage.
+  useEffect(() => {
+    if (!showShares) return;
+    let changed = false;
+    const next = rows.map((r) => {
+      if (!r.shares) return r; // percentage rows, and reopened ones not retyped
+      const exact = sharePct(r.ticker.trim().toUpperCase(), r.shares);
+      if (exact === undefined || (r.exact !== undefined && Math.abs(exact - r.exact) < 1e-9)) return r;
+      changed = true;
+      return { ...r, exact, pct: String(round2(exact)) };
+    });
+    if (changed) onChange(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prices, amount, priceDate, showShares]);
+  /** What the Shares box shows: what was typed, else worked out from the percentage. */
+  const sharesShown = (r: Row): string => {
+    if (r.shares) return r.shares;
+    const px = priceOf(r.ticker.trim().toUpperCase())?.close;
+    const p = pctOf(r);
+    return px && amount && p > 0 ? shareText(((p / 100) * amount) / px) : "";
+  };
+  const cashLeft = amount ? ((100 - total) / 100) * amount : 0;
+  const priceNote = (t: string) => {
+    const p = priceOf(t);
+    if (!p) return "";
+    return p.estimate ? `${money(p.close, 2)} a share (latest close)` : `${money(p.close, 2)} a share on ${humanDate(p.day)}`;
+  };
+
   if (locked) {
     return (
       <div className="space-y-1.5" data-testid={`${idPrefix}-locked`}>
         {rows.map((r) => (
           <div key={r.ticker} className="flex items-center justify-between rounded-sm border border-rule bg-paper px-2.5 py-2 text-sm">
             <span className="font-medium">{r.ticker}</span>
-            <span className="num text-muted">{r.pct}%</span>
+            <span className="num text-muted">
+              {showShares && sharesShown(r) ? `${sharesShown(r)} shares · ` : ""}
+              {r.pct}%
+            </span>
           </div>
         ))}
         <p className="text-[11px] leading-snug text-muted">
@@ -143,6 +243,16 @@ export default function MixEditor({
 
   return (
     <div className="space-y-2">
+      {showShares && (
+        <div className="-mb-1 flex items-center gap-2 text-[10px] font-medium uppercase tracking-wide text-muted">
+          <span className="flex-1">Ticker</span>
+          <span className="w-[76px] shrink-0 text-right">Shares</span>
+          <span className="w-[76px] shrink-0 text-right" title={`Percent of ${money(amount!)}`}>
+            %
+          </span>
+          <span className="w-[26px] shrink-0" />
+        </div>
+      )}
       {rows.map((r, i) => {
         const t = r.ticker.trim().toUpperCase();
         const status = searching.has(i) ? "checking…" : !t ? "" : !TICKER_RE.test(t) ? "not a ticker" : !info[t] ? "checking…" : info[t].status === "ok" ? "" : info[t].status === "not_found" ? "not found" : "unavailable";
@@ -157,7 +267,24 @@ export default function MixEditor({
                 label={`Ticker ${i + 1}`}
                 testId={`${idPrefix}-ticker-${i}`}
               />
-              <div className="relative w-[84px] shrink-0">
+              {showShares && (
+                <input
+                  aria-label={`Shares of ticker ${i + 1}`}
+                  data-testid={`${idPrefix}-shares-${i}`}
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="any"
+                  placeholder={t && !priceOf(t) && info[t]?.status === "ok" ? "…" : ""}
+                  disabled={!priceOf(t)}
+                  value={sharesShown(r)}
+                  onChange={(e) => setShares(i, e.target.value)}
+                  className={`num w-[76px] shrink-0 rounded-sm border bg-surface px-2 py-2 text-right text-[13px] disabled:bg-paper disabled:text-muted ${NOSPIN} ${
+                    r.shares ? "border-ink/40" : "border-rule"
+                  }`}
+                />
+              )}
+              <div className={`relative ${showShares ? "w-[76px]" : "w-[84px]"} shrink-0`}>
                 <input
                   aria-label={`Percentage for ticker ${i + 1}`}
                   data-testid={`${idPrefix}-pct-${i}`}
@@ -167,14 +294,24 @@ export default function MixEditor({
                   max="100"
                   step="any"
                   value={r.pct}
-                  onChange={(e) => set(i, { pct: e.target.value })}
-                  className="num w-full rounded-sm border border-rule bg-surface py-2 pl-2.5 pr-6 text-right text-sm"
+                  onChange={(e) => set(i, { pct: e.target.value, shares: undefined, exact: undefined })}
+                  className={`num w-full rounded-sm border border-rule bg-surface py-2 text-right ${
+                    showShares ? `pl-1.5 pr-5 text-[13px] ${NOSPIN}` : "pl-2.5 pr-6 text-sm"
+                  }`}
                 />
-                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-sm text-muted">%</span>
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-sm text-muted">%</span>
               </div>
               <button
                 type="button"
-                onClick={() => onChange(rows.length > 1 ? spreadEvenly(rows.filter((_, k) => k !== i)) : [{ ticker: "", pct: "100" }])}
+                onClick={() =>
+                  onChange(
+                    rows.length <= 1
+                      ? [{ ticker: "", pct: "100" }]
+                      : byShares // removing a row keeps the others' shares; its money goes to cash
+                        ? rows.filter((_, k) => k !== i)
+                        : spreadEvenly(rows.filter((_, k) => k !== i)),
+                  )
+                }
                 className="shrink-0 rounded-sm p-1.5 text-muted transition-colors hover:text-loss"
                 aria-label={`Remove ticker ${i + 1}`}
               >
@@ -184,6 +321,11 @@ export default function MixEditor({
             {(status || info[t]?.name) && (
               <div className={`mt-0.5 truncate pl-0.5 text-[11px] ${status && status !== "checking…" ? "text-loss" : "text-muted"}`}>
                 {status || info[t]?.name}
+              </div>
+            )}
+            {!status && showShares && priceNote(t) && (
+              <div className="pl-0.5 text-[11px] text-muted" data-testid={`${idPrefix}-price-${i}`}>
+                {priceNote(t)}
               </div>
             )}
             {!status && startDate && info[t]?.status === "ok" && info[t]?.first_date && info[t]!.first_date! > startDate && (
@@ -199,7 +341,9 @@ export default function MixEditor({
           <button
             type="button"
             onClick={() =>
-              rows.length >= maxTickers ? onLimit?.() : onChange(spreadEvenly([...rows, { ticker: "", pct: "" }]))
+              rows.length >= maxTickers
+                ? onLimit?.()
+                : onChange(byShares ? [...rows, { ticker: "", pct: "", shares: "", exact: 0 }] : spreadEvenly([...rows, { ticker: "", pct: "" }]))
             }
             className="flex items-center gap-1 text-muted underline decoration-rule underline-offset-2 hover:text-ink"
           >
@@ -208,10 +352,24 @@ export default function MixEditor({
         ) : (
           <span />
         )}
-        <span className={`num ${Math.abs(total - 100) > 0.01 ? "text-loss" : "text-muted"}`}>
+        <span
+          className={`num ${(byShares ? total > 100.01 : Math.abs(total - 100) > 0.01) ? "text-loss" : "text-muted"}`}
+          data-testid={`${idPrefix}-total`}
+        >
           Total {round2(total)}%
+          {byShares && amount && total < 99.995 ? ` · Cash ${money(cashLeft)}` : ""}
         </span>
       </div>
+      {showShares && byShares && total < 99.995 && total <= 100.01 && (
+        <p className="m-0 text-[11px] leading-snug text-muted" data-testid={`${idPrefix}-cash-note`}>
+          {money(cashLeft)} isn't spent on shares, so it stays in cash (as does {round2(100 - total)}% of any weekly amount).
+        </p>
+      )}
+      {showShares && priceDate && priceDate < new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10) && (
+        <p className="m-0 text-[11px] leading-snug text-muted">
+          Prices are adjusted for later stock splits, so share counts are in today's shares.
+        </p>
+      )}
     </div>
   );
 }

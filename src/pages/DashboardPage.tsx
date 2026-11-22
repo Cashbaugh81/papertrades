@@ -291,7 +291,7 @@ function ColumnCard({
 
   /** The mix as typed differs from the one in force. */
   const changed = (() => {
-    const r = mixFromRows(rows, info);
+    const r = mixFromRows(rows, info, set.initial);
     if (!r.mix || !mix) return rows.some((x) => x.ticker.trim());
     const a = Object.entries(r.mix).sort();
     const b = Object.entries(mix).sort();
@@ -299,7 +299,7 @@ function ColumnCard({
   })();
 
   async function save() {
-    const r = mixFromRows(rows, info); // the new mix replays from the start date
+    const r = mixFromRows(rows, info, set.initial); // the new mix replays from the start date
     if (!r.mix) return setError(r.problem ?? "Check the mix.");
     setBusy(true);
     setError(null);
@@ -465,6 +465,8 @@ function ColumnCard({
                     maxTickers={limits.maxTickers}
                     onLimit={limits.maxTickers < 8 ? () => onUpgrade?.("tickers") : undefined}
                     startDate={p.startDate}
+                    amount={set.initial}
+                    priceDate={p.startDate}
                   />
                   <input
                     value={note}
@@ -586,7 +588,7 @@ function EmptyColumn({
   }, [startOpen]);
 
   async function save() {
-    const r = mixFromRows(rows, info);
+    const r = mixFromRows(rows, info, set.initial);
     if (!r.mix) return setError(r.problem ?? "Check the mix.");
     setBusy(true);
     setError(null);
@@ -624,6 +626,8 @@ function EmptyColumn({
             maxTickers={limits.maxTickers}
             onLimit={limits.maxTickers < 8 ? () => onUpgrade?.("tickers") : undefined}
             startDate={set.startDate}
+            amount={set.initial}
+            priceDate={set.startDate}
           />
           {copyOf && (
             <p className="text-[11px] leading-snug text-muted">A copy of portfolio {copyOf}. Adjust it, then add it.</p>

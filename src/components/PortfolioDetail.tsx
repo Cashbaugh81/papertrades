@@ -521,6 +521,16 @@ function HoldingsTable({ state }: { state: PortfolioState }) {
                 </td>
               </tr>
             ))}
+            {state.cash > 0.5 && (
+              <tr className="border-b border-rule/60 text-muted" data-testid="detail-cash-row">
+                <td className="py-1.5 pr-3 font-medium">Cash</td>
+                <td className="py-1.5 pr-3 text-right" colSpan={2}>
+                  not in shares
+                </td>
+                <td className="num py-1.5 pr-3 text-right">{money(state.cash)}</td>
+                <td className="py-1.5 text-right" colSpan={2} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

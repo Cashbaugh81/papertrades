@@ -244,6 +244,10 @@ export type Database = {
         Args: { p_tickers: string[]; p_from?: string };
         Returns: { ticker: string; dates: string[]; closes: number[] }[];
       };
+      prices_on: {
+        Args: { p_tickers: string[]; p_day: string };
+        Returns: { ticker: string; day: string; close: number; estimate: boolean }[];
+      };
     };
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };
