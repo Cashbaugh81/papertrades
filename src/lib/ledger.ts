@@ -199,6 +199,9 @@ function applyRebalance(index: PriceIndex, book: Book, tx: Tx, day: string): Fil
   book.waiting = new Map();
   book.cash = 0;
   const weights = tx.weights ?? {};
+  // A mix bought by shares can add up to less than 100%: the rest stays cash.
+  const invested = Object.values(weights).reduce((a, w) => a + w, 0);
+  book.cash = invested < 1 - 1e-9 ? total * (1 - invested) : 0;
   for (const [t, w] of Object.entries(weights)) {
     // rebalanceDay guarantees a close, unless the ticker hasn't started trading.
     const px = index.close(t, day);
@@ -623,10 +626,12 @@ export function shortDate(d: string): string {
 /** A mix as text, biggest share first: "NVDA 50% · SMH 50%". */
 export function mixLabel(mix?: Record<string, number>): string {
   if (!mix) return "—";
-  return Object.entries(mix)
+  const parts = Object.entries(mix)
     .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
-    .map(([t, w]) => `${t} ${Math.round(w * 1000) / 10}%`)
-    .join(" · ");
+    .map(([t, w]) => `${t} ${Math.round(w * 1000) / 10}%`);
+  const cash = 1 - Object.values(mix).reduce((a, w) => a + w, 0);
+  if (cash >= 0.0005) parts.push(`Cash ${Math.round(cash * 1000) / 10}%`);
+  return parts.join(" · ");
 }
 
 export function money(n: number, decimals = 0): string {

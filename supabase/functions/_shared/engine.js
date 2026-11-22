@@ -277,6 +277,8 @@ function applyRebalance(index, book, tx, day) {
   book.waiting = /* @__PURE__ */ new Map();
   book.cash = 0;
   const weights = tx.weights ?? {};
+  const invested = Object.values(weights).reduce((a, w) => a + w, 0);
+  book.cash = invested < 1 - 1e-9 ? total * (1 - invested) : 0;
   for (const [t, w] of Object.entries(weights)) {
     const px = index.close(t, day);
     if (px !== void 0 && px > 0) {

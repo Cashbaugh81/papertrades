@@ -541,3 +541,30 @@ describe("timeline for a stock that started trading later", () => {
     expect(s.byTicker.NEW[40]).toBeCloseTo(5_000, 6);
   });
 });
+
+describe("mixes bought by shares (under 100%, rest in cash)", () => {
+  const mixTx = (weights: Record<string, number>): Tx => ({ id: "m", kind: "rebalance", date: dates[0], weights });
+
+  it("keeps the unspent part of the starting amount as cash", () => {
+    // 50 AAA at 100 ($5,000) + 60 BBB at 50 ($3,000) out of $10,000: $2,000 stays cash.
+    const s = computeState(index, pf({ tx: [mixTx({ AAA: 0.5, BBB: 0.3 })] }), last);
+    const units = Object.fromEntries(s.holdings.map((h) => [h.ticker, h.units]));
+    expect(units.AAA).toBeCloseTo(50, 9);
+    expect(units.BBB).toBeCloseTo(60, 9);
+    expect(s.cashSeries[0]).toBeCloseTo(2_000, 6);
+    expect(s.values[0]).toBeCloseTo(10_000, 6);
+    expect(s.value).toBeCloseTo(10_500, 6); // AAA's 10% step on half the money; cash doesn't move
+  });
+
+  it("a weekly deposit keeps the same share in cash", () => {
+    const s = computeState(index, pf({ initial: 1_000, weekly: 100, tx: [mixTx({ AAA: 0.8 })] }), dates[30]);
+    expect(s.invested).toBeGreaterThan(1_000);
+    expect(s.cashSeries[30]).toBeCloseTo(s.invested * 0.2, 6);
+  });
+
+  it("names the cash in the mix label", async () => {
+    const { mixLabel } = await import("@/lib/ledger");
+    expect(mixLabel({ AAA: 0.5, BBB: 0.44 })).toBe("AAA 50% · BBB 44% · Cash 6%");
+    expect(mixLabel({ AAA: 0.5, BBB: 0.5 })).toBe("AAA 50% · BBB 50%");
+  });
+});

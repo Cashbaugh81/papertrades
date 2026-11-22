@@ -321,3 +321,31 @@ export function mergeBundles(a: PriceBundle, b: PriceBundle): PriceBundle {
     series: { ...a.series, ...b.series },
   };
 }
+
+export type StartPrice = { day: string; close: number; estimate: boolean };
+
+const startPriceCache = new Map<string, StartPrice | null>();
+
+/**
+ * The close each ticker buys at for `day`: the first close on or after it (a
+ * stock not trading yet buys at its first close), or the latest close as an
+ * estimate when there's none yet (a start date of today). Cached per session.
+ */
+export async function pricesOn(tickers: string[], day: string): Promise<Record<string, StartPrice>> {
+  const want = [...new Set(tickers)].filter((t) => !startPriceCache.has(`${t}|${day}`)).slice(0, 10);
+  if (want.length) {
+    const { data, error } = await supabase.rpc("prices_on", { p_tickers: want, p_day: day });
+    if (error) throw rpcError(error);
+    const rows = (data ?? []) as { ticker: string; day: string; close: number | string; estimate: boolean }[];
+    for (const t of want) {
+      const r = rows.find((x) => x.ticker === t);
+      startPriceCache.set(`${t}|${day}`, r ? { day: r.day, close: Number(r.close), estimate: r.estimate } : null);
+    }
+  }
+  const out: Record<string, StartPrice> = {};
+  for (const t of tickers) {
+    const v = startPriceCache.get(`${t}|${day}`);
+    if (v) out[t] = v;
+  }
+  return out;
+}

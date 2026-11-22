@@ -99,8 +99,8 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
   }
   const roomForClone = cols.some((r, k) => k > 0 && isBlank(r)) || cols.length < limits.maxPortfolios || limits.maxPortfolios < MAX_PORTFOLIOS;
   const checked = useMemo(
-    () => cols.map((rows) => (isBlank(rows) ? null : mixFromRows(rows, info))),
-    [cols, info, mode, startDate],
+    () => cols.map((rows) => (isBlank(rows) ? null : mixFromRows(rows, info, initialNum))),
+    [cols, info, mode, startDate, initialNum],
   );
   const filled = checked.filter((c) => c !== null);
   const problem =
@@ -296,6 +296,8 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
               lookup={lookup}
               suggestions={suggestions}
               startDate={mode === "past" ? startDate : undefined}
+              amount={initialNum}
+              priceDate={startDate || undefined}
             />
             {checked[i]?.problem && !checked[i]!.problem!.startsWith("Checking") && (
               <p className="mt-2 text-[11px] leading-snug text-loss">{checked[i]!.problem}</p>
