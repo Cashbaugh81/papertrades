@@ -59,8 +59,9 @@ describe("buying by shares", () => {
     expect(rowsFromMix({ DIS: 0.5, NFLX: 0.5 })[0].shares).toBeUndefined();
   });
 
-  it("shows shares with up to three decimals", () => {
-    expect(shareText(44.73912)).toBe("44.739");
+  it("shows fractional shares with up to four decimals", () => {
+    expect(shareText(44.739126)).toBe("44.7391");
+    expect(shareText(0.25)).toBe("0.25");
     expect(shareText(20)).toBe("20");
   });
 });

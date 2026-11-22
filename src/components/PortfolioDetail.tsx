@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { SHARE_DECIMALS } from "@/components/MixEditor";
 import Stat from "@/components/Stat";
 import { humanDate, mixLabel, money, pct, signedPct, TAX_RATES } from "@/lib/ledger";
 import type { PortfolioState, TimelineEvent } from "@/lib/types";
@@ -497,7 +498,7 @@ function HoldingsTable({ state }: { state: PortfolioState }) {
               return (
                 <tr key={h.ticker} className="border-b border-rule/60">
                   <td className="py-1.5 pr-3 font-medium">{h.ticker}</td>
-                  <td className="num py-1.5 pr-3 text-right">{h.units.toLocaleString("en-US", { maximumFractionDigits: 3 })}</td>
+                  <td className="num py-1.5 pr-3 text-right">{h.units.toLocaleString("en-US", { maximumFractionDigits: SHARE_DECIMALS })}</td>
                   <td className="num py-1.5 pr-3 text-right">{money(h.price, 2)}</td>
                   <td className="num py-1.5 pr-3 text-right">{money(h.value)}</td>
                   <td className="num py-1.5 pr-3 text-right">{money(h.cost)}</td>

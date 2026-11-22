@@ -55,7 +55,7 @@ check("adding a row keeps the first row's shares", (await val('[data-testid="set
 await page.fill('[data-testid="setup-2-ticker-1"]', "MSFT");
 await settle();
 await page.waitForFunction(() => !(document.querySelector('[data-testid="setup-2-shares-1"]') as HTMLInputElement)?.disabled, null, { timeout: 20_000 });
-await page.fill('[data-testid="setup-2-shares-1"]', "5");
+await page.fill('[data-testid="setup-2-shares-1"]', "2.75"); // a fraction of a share
 const total = await page.innerText('[data-testid="setup-2-total"]');
 await page.screenshot({ path: "checks/out/shares-setup.png" });
 
@@ -77,6 +77,8 @@ await page.waitForTimeout(900);
 const holdings = await page.innerText('[data-testid="col-2"] [data-testid="detail-holdings"]');
 const nvda = holdings.split("\n").find((l) => l.startsWith("NVDA")) ?? "";
 check("it holds exactly the 20 shares", /\s20(\.000)?\s/.test(` ${nvda.replace(/\t/g, " ")} `), nvda.replace(/\t/g, " "));
+const msft = holdings.split("\n").find((l) => l.startsWith("MSFT")) ?? "";
+check("a fraction of a share is held and shown", /\s2\.75\s/.test(` ${msft.replace(/\t/g, " ")} `), msft.replace(/\t/g, " "));
 check("and lists the cash", (await page.locator('[data-testid="col-2"] [data-testid="detail-cash-row"]').count()) === 1);
 check("the editor reopens with the same shares", (await val('[data-testid="edit-2-shares-0"]')).startsWith("20") || (await val('[data-testid="edit-2-shares-1"]')).startsWith("20"));
 check("…and nothing to save", await page.locator('[data-testid="col-2-save"]').isDisabled());

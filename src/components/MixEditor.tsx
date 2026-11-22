@@ -35,8 +35,11 @@ export function rowsFromMix(mix?: Mix): Row[] {
 /** Rows that buy by shares rather than by percentage (so the mix may keep cash). */
 export const usesShares = (rows: Row[]) => rows.some((r) => r.shares !== undefined);
 
-/** Shares to show for a dollar amount at a price: up to 3 decimals, no trailing zeros. */
-export const shareText = (n: number) => (Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : "");
+/** Decimal places shown for share counts; fractional shares are allowed everywhere. */
+export const SHARE_DECIMALS = 4;
+/** Shares to show for a dollar amount at a price: up to 4 decimals, no trailing zeros. */
+export const shareText = (n: number) =>
+  Number.isFinite(n) ? String(Math.round(n * 10 ** SHARE_DECIMALS) / 10 ** SHARE_DECIMALS) : "";
 
 /**
  * The mix the rows describe, or a reason it isn't one yet. Tickers must have
@@ -270,6 +273,7 @@ export default function MixEditor({
               {showShares && (
                 <input
                   aria-label={`Shares of ticker ${i + 1}`}
+                  title="Whole or partial shares, e.g. 2.5"
                   data-testid={`${idPrefix}-shares-${i}`}
                   type="number"
                   inputMode="decimal"
