@@ -343,8 +343,13 @@ function YouSlide() {
         data-testid="whatif-title"
       >
         What if I invest $10,000 today in{" "}
-        <label className="inline-block align-baseline">
+        {/* The box is exactly as wide as its text (or the placeholder): a hidden copy of
+            the text sets the width and the input fills it, so nothing gets cut off. */}
+        <label className="inline-grid max-w-full align-baseline">
           <span className="sr-only">Stock ticker</span>
+          <span aria-hidden className="invisible col-start-1 row-start-1 whitespace-pre border-b-2 border-transparent pr-[0.15em]">
+            {raw || "Enter Stock Ticker"}
+          </span>
           <input
             value={raw}
             onChange={(e) => setRaw(e.target.value.toUpperCase().slice(0, 12))}
@@ -352,8 +357,8 @@ function YouSlide() {
             autoComplete="off"
             spellCheck={false}
             maxLength={12}
-            size={raw ? Math.max(raw.length + 1, 4) : 14}
-            className="max-w-full border-0 border-b-2 border-dashed border-accent bg-transparent p-0 font-[inherit] text-accent placeholder:text-accent/50 focus:border-solid focus:outline-none"
+            size={1}
+            className="col-start-1 row-start-1 w-full min-w-0 border-0 border-b-2 border-dashed border-accent bg-transparent p-0 font-[inherit] text-accent placeholder:text-accent/50 focus:border-solid focus:outline-none"
             style={{ fontSize: "inherit" }}
             data-testid="whatif-ticker-input"
           />
