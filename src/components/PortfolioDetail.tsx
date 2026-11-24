@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { SHARE_DECIMALS } from "@/components/MixEditor";
+import { nyTime, SHARE_DECIMALS } from "@/components/MixEditor";
 import Stat from "@/components/Stat";
 import { humanDate, mixLabel, money, pct, signedPct, TAX_RATES } from "@/lib/ledger";
 import type { PortfolioState, TimelineEvent } from "@/lib/types";
@@ -181,13 +181,21 @@ function TaxCard({
   );
 }
 
+/** " NVDA at $152.15, VTI at $352.30: live prices at 3:04 PM ET; the rest at the close." */
+function liveText(e: TimelineEvent): string {
+  if (!e.live) return "";
+  const list = Object.entries(e.live.prices).map(([t, px]) => `${t} at ${money(px, 2)}`);
+  const all = Object.keys(e.weights ?? {}).every((t) => t in e.live!.prices);
+  return ` ${list.join(", ")}: live price${list.length > 1 ? "s" : ""} at ${nyTime(e.live.at)} ET${all ? "" : "; the rest at the close"}.`;
+}
+
 function eventText(e: TimelineEvent): string {
   const names = (e.tickers ?? []).join(", ");
   switch (e.kind) {
     case "start":
-      return `Bought ${mixLabel(e.weights)} with ${money(e.amount ?? 0)}.`;
+      return `Bought ${mixLabel(e.weights)} with ${money(e.amount ?? 0)}.${liveText(e)}`;
     case "mix":
-      return `Switched to ${mixLabel(e.weights)}, moving ${money(e.amount ?? 0)}.`;
+      return `Switched to ${mixLabel(e.weights)}, moving ${money(e.amount ?? 0)}.${liveText(e)}`;
     case "waiting":
       return `${names} ${e.tickers!.length > 1 ? "weren't" : "wasn't"} trading yet, so ${e.tickers!.length > 1 ? "their" : "its"} share was held as cash.`;
     case "bought_in":

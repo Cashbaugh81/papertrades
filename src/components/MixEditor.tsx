@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
-import { pricesOn, type Mix, type StartPrice, type TickerInfo } from "@/lib/api";
+import { liveQuotes, pricesOn, type Mix, type StartPrice, type TickerInfo } from "@/lib/api";
 import { humanDate, money } from "@/lib/ledger";
 import TickerField from "@/components/TickerField";
 
@@ -31,6 +31,10 @@ export function rowsFromMix(mix?: Mix): Row[] {
         : { ticker, pct: String(Math.round(w * 10000) / 100) },
     );
 }
+
+/** "3:04 PM", New York time. */
+export const nyTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
 
 /** Rows that buy by shares rather than by percentage (so the mix may keep cash). */
 export const usesShares = (rows: Row[]) => rows.some((r) => r.shares !== undefined);
@@ -146,8 +150,18 @@ export default function MixEditor({
   useEffect(() => {
     if (!showShares || !okTickers) return;
     let alive = true;
+    const put = (p: Record<string, StartPrice>) =>
+      alive && setPrices((old) => ({ ...old, ...Object.fromEntries(Object.entries(p).map(([t, v]) => [`${t}|${priceDate}`, v])) }));
     pricesOn(okTickers.split(","), priceDate!)
-      .then((p) => alive && setPrices((old) => ({ ...old, ...Object.fromEntries(Object.entries(p).map(([t, v]) => [`${t}|${priceDate}`, v])) })))
+      .then(async (p) => {
+        put(p);
+        // No close yet for the start date (today): while the market is open, a live
+        // portfolio buys at live prices, so show those instead of the latest close.
+        const today = Object.keys(p).filter((t) => p[t].estimate);
+        if (!today.length) return;
+        const live = await liveQuotes(today);
+        put(Object.fromEntries(Object.entries(live).map(([t, q]) => [t, { day: priceDate!, close: q.price, estimate: false, liveAt: q.at }])));
+      })
       .catch(() => undefined);
     return () => {
       alive = false;
@@ -222,6 +236,7 @@ export default function MixEditor({
   const priceNote = (t: string) => {
     const p = priceOf(t);
     if (!p) return "";
+    if (p.liveAt) return `${money(p.close, 2)} a share (live, ${nyTime(p.liveAt)} ET)`;
     return p.estimate ? `${money(p.close, 2)} a share (latest close)` : `${money(p.close, 2)} a share on ${humanDate(p.day)}`;
   };
 

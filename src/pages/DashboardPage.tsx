@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
 import { Copy, History, Plus, X } from "lucide-react";
-import MixEditor, { mixFromRows, rowsFromMix, type Row } from "@/components/MixEditor";
+import MixEditor, { mixFromRows, nyTime, rowsFromMix, type Row } from "@/components/MixEditor";
 import PathChart, { SERIES_COLORS } from "@/components/PathChart";
 import { ErrorNote, MAX_PORTFOLIOS } from "@/pages/SetupPage";
 import type { ActiveSet, Column, Limits, Mix, TickerInfo } from "@/lib/api";
@@ -13,7 +13,7 @@ import PortfolioDetail from "@/components/PortfolioDetail";
 
 import { ordinal, rankTints, tintColors, type RankTint } from "@/lib/rankTint";
 import { humanDate, mixLabel, money, pct, signedPct } from "@/lib/ledger";
-import type { PortfolioState, Tx } from "@/lib/types";
+import type { Portfolio, PortfolioState, Tx } from "@/lib/types";
 
 type Props = {
   set: ActiveSet;
@@ -425,7 +425,7 @@ function ColumnCard({
 
       {waitingToStart && (
         <p className="mt-3 rounded-sm bg-paper px-2.5 py-2 text-[12px] leading-snug text-muted">
-          Waiting for the next market close. The money is invested at that day's closing prices.
+          {liveNote(p, firstMix?.weights) ?? "Waiting for the next market close. The money is invested at that day's closing prices."}
         </p>
       )}
       {startedLater && !set.whatIf && (
@@ -734,6 +734,24 @@ function lateNotes(state: PortfolioState): string[] {
     .map(([t, day]) => `${t}'s share was held as cash until it started trading on ${humanDate(day)}.`);
   for (const t of Object.keys(state.waiting ?? {}).sort()) out.push(`${t}'s share is held as cash until it starts trading.`);
   return out;
+}
+
+/**
+ * For a live portfolio bought at live prices that's waiting for today's close:
+ * what it paid and when. Undefined when it buys at the close.
+ */
+function liveNote(p: Portfolio, weights?: Record<string, number>): string | undefined {
+  const q = p.startQuotes;
+  if (!q || !weights) return undefined;
+  const live = Object.keys(weights).filter((t) => q[t]);
+  if (!live.length) return undefined;
+  const at = live.map((t) => q[t].at).sort()[0];
+  const rest = Object.keys(weights).filter((t) => !q[t]);
+  return (
+    `Bought at live prices at ${nyTime(at)} ET: ${live.map((t) => `${t} ${money(q[t].price, 2)}`).join(", ")}.` +
+    (rest.length ? ` ${rest.join(", ")} ${rest.length > 1 ? "buy" : "buys"} at today's close.` : "") +
+    " Its value shows after today's close."
+  );
 }
 
 /** The mix a portfolio was last set to (a pending change counts): it decides portfolio 1's default name. */

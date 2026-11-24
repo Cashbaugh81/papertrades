@@ -4,6 +4,7 @@
  * order times, no edits to filled rows); this module just speaks to them.
  */
 import { supabase } from "@/lib/supabase";
+import { nyDate } from "@/lib/market";
 import { rowToPortfolio, seriesToBundle, type SeriesRow } from "@/lib/rows";
 import type { Account, Portfolio, PriceBundle } from "@/lib/types";
 
@@ -217,13 +218,55 @@ export async function createSet(input: {
   weekly: number;
   columns: { slot: number; weights: Mix; name?: string; customName?: string }[];
 }): Promise<void> {
-  const { error } = await supabase.rpc("create_comparison_set", {
+  const { data, error } = await supabase.rpc("create_comparison_set", {
     p_start_date: input.startDate,
     p_initial: input.initial,
     p_weekly: input.weekly,
     p_columns: input.columns,
   });
   if (error) throw rpcError(error);
+  // A live comparison started while the market is open buys at live prices:
+  // the server takes them now, once. If that fails it buys at today's close.
+  if (typeof data === "string" && input.startDate >= nyDate()) await lockLivePrices(data).catch(() => undefined);
+}
+
+export type LiveQuote = { price: number; at: string };
+
+/** Take live prices as the purchase prices of a live comparison just created. */
+export async function lockLivePrices(setId: string): Promise<Record<number, Record<string, LiveQuote>>> {
+  const { data, error } = await supabase.functions.invoke<{ locked?: Record<number, Record<string, LiveQuote>> }>(
+    "live-quotes",
+    { body: { action: "start", setId } },
+  );
+  if (error) throw error;
+  return data?.locked ?? {};
+}
+
+const liveCache = new Map<string, { q: LiveQuote | null; t: number }>();
+
+/**
+ * What a share costs right now (market hours only; none for mutual funds or
+ * when the market is closed). Reused for a minute.
+ */
+export async function liveQuotes(tickers: string[]): Promise<Record<string, LiveQuote>> {
+  const now = Date.now();
+  const want = [...new Set(tickers)].filter((t) => {
+    const c = liveCache.get(t);
+    return !c || now - c.t > 60_000;
+  });
+  if (want.length) {
+    const { data, error } = await supabase.functions.invoke<{ quotes?: Record<string, LiveQuote> }>("live-quotes", {
+      body: { action: "quote", tickers: want.slice(0, 10) },
+    });
+    if (error) throw error;
+    for (const t of want) liveCache.set(t, { q: data?.quotes?.[t] ?? null, t: now });
+  }
+  const out: Record<string, LiveQuote> = {};
+  for (const t of tickers) {
+    const q = liveCache.get(t)?.q;
+    if (q) out[t] = q;
+  }
+  return out;
 }
 
 /** Fill an empty column. In a live comparison its money starts today. */
@@ -322,7 +365,8 @@ export function mergeBundles(a: PriceBundle, b: PriceBundle): PriceBundle {
   };
 }
 
-export type StartPrice = { day: string; close: number; estimate: boolean };
+/** A buy price for a start date: a close, or (`liveAt`) a live price during market hours. */
+export type StartPrice = { day: string; close: number; estimate: boolean; liveAt?: string };
 
 const startPriceCache = new Map<string, StartPrice | null>();
 
