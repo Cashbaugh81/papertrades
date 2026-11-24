@@ -64,6 +64,14 @@ export type Portfolio = {
   weekly?: number;
   tx: Tx[];
   /**
+   * Live purchase prices for a live portfolio created during market hours, by
+   * ticker. They apply to a mix that fills on the day they were taken; other
+   * tickers (mutual funds) buy at that day's close. `ratio` = price / that
+   * day's close, frozen once the close arrives (so later dividend
+   * re-adjustments of old closes don't move it).
+   */
+  startQuotes?: Record<string, StartQuote>;
+  /**
    * Where contributions go before any rebalance has filled, as fractions
    * summing to 1. After a rebalance fills, its mix takes over.
    *
@@ -93,6 +101,8 @@ export type Holding = {
   cost: number;
 };
 
+export type StartQuote = { price: number; at: string; ratio?: number };
+
 export type Fill = {
   /** Trading day whose close the order filled at. */
   date: string;
@@ -101,6 +111,8 @@ export type Fill = {
   amount: number;
   /** For a rebalance: tickers not trading yet, whose share was set aside as cash. */
   waited?: string[];
+  /** For a rebalance: tickers bought at a live price during the day, not the close. */
+  live?: string[];
 };
 
 export type PendingOrder = {
@@ -206,4 +218,6 @@ export type TimelineEvent = {
   weights?: Record<string, number>;
   tickers?: string[];
   amount?: number;
+  /** For a start or mix change bought partly at live prices: the price paid per ticker, and when. */
+  live?: { prices: Record<string, number>; at: string };
 };

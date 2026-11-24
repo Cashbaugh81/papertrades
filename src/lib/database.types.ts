@@ -71,6 +71,7 @@ export type Database = {
         Row: {
           created_at: string;
           custom_name: string | null;
+          start_quotes: Json | null;
           id: string;
           name: string;
           set_id: string;

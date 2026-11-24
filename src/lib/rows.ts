@@ -3,7 +3,7 @@
  * the nightly-close edge function, so both run the engine on the same input.
  */
 import type { Database } from "@/lib/database.types";
-import type { Portfolio, PriceBundle, Tx, TxKind } from "@/lib/types";
+import type { Portfolio, PriceBundle, StartQuote, Tx, TxKind } from "@/lib/types";
 
 export type PortfolioRow = Database["public"]["Tables"]["portfolios"]["Row"];
 export type SetRow = Database["public"]["Tables"]["comparison_sets"]["Row"];
@@ -57,11 +57,26 @@ export function rowToPortfolio(p: PortfolioRow, set: Pick<SetRow, "initial" | "w
     startDate: p.start_date,
     initial: Number(set.initial),
     weekly: Number(set.weekly),
+    ...(toQuotes(p.start_quotes) ? { startQuotes: toQuotes(p.start_quotes) } : {}),
     tx: txs
       .filter((t) => t.portfolio_id === p.id)
       .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
       .map(rowToTx),
   };
+}
+
+/** Live purchase prices as stored, keeping only well-formed entries. */
+export function toQuotes(v: unknown): Record<string, StartQuote> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const out: Record<string, StartQuote> = {};
+  for (const [t, q] of Object.entries(v as Record<string, unknown>)) {
+    const o = q as { price?: unknown; at?: unknown; ratio?: unknown } | null;
+    const price = Number(o?.price);
+    const ratio = Number(o?.ratio);
+    if (!(price > 0) || typeof o?.at !== "string") continue;
+    out[t] = { price, at: o.at, ...(ratio > 0 ? { ratio } : {}) };
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Every ticker a portfolio needs prices for, including the calendar anchor. */

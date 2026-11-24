@@ -568,3 +568,49 @@ describe("mixes bought by shares (under 100%, rest in cash)", () => {
     expect(mixLabel({ AAA: 0.5, BBB: 0.5 })).toBe("AAA 50% · BBB 50%");
   });
 });
+
+describe("live purchase prices (a live portfolio created during market hours)", () => {
+  // dates[0] is Mon 2024-01-01; AAA closes at 100, BBB at 50.
+  const mix = (weights: Record<string, number>): Tx => ({ id: "m", kind: "rebalance", date: dates[0], weights });
+  const at = `${dates[0]}T16:42:00Z`; // 11:42 New York that day
+
+  it("buys at the live price, then is valued at the close", () => {
+    const s = computeState(index, pf({ tx: [mix({ AAA: 1 })], startQuotes: { AAA: { price: 98, at } } }), dates[0]);
+    const units = s.holdings.find((h) => h.ticker === "AAA")!.units;
+    expect(units).toBeCloseTo(10_000 / 98, 9);
+    expect(s.values[0]).toBeCloseTo((10_000 / 98) * 100, 6); // up 2% by the close
+    expect(s.fills.m.live).toEqual(["AAA"]);
+  });
+
+  it("a ticker without a live price buys at the close", () => {
+    const s = computeState(index, pf({ tx: [mix({ AAA: 0.5, BBB: 0.5 })], startQuotes: { AAA: { price: 98, at } } }), dates[0]);
+    const units = Object.fromEntries(s.holdings.map((h) => [h.ticker, h.units]));
+    expect(units.AAA).toBeCloseTo(5_000 / 98, 9);
+    expect(units.BBB).toBeCloseTo(5_000 / 50, 9);
+  });
+
+  it("a frozen ratio wins, so later price re-adjustments don't move the purchase", () => {
+    // Recorded at 98 against a then-close of 100 (ratio 0.98); the stored close is
+    // still 100 here, but the ratio is what's used.
+    const s = computeState(index, pf({ tx: [mix({ AAA: 1 })], startQuotes: { AAA: { price: 49, at, ratio: 0.98 } } }), dates[0]);
+    expect(s.holdings[0].units).toBeCloseTo(10_000 / 98, 9);
+  });
+
+  it("a quote from another day is ignored", () => {
+    const s = computeState(
+      index,
+      pf({ tx: [mix({ AAA: 1 })], startQuotes: { AAA: { price: 98, at: `${dates[3]}T16:42:00Z` } } }),
+      dates[0],
+    );
+    expect(s.holdings[0].units).toBeCloseTo(100, 9);
+    expect(s.fills.m.live).toBeUndefined();
+  });
+});
+
+describe("toQuotes", () => {
+  it("keeps well-formed quotes only", async () => {
+    const { toQuotes } = await import("@/lib/rows");
+    expect(toQuotes({ A: { price: 1.5, at: "x" }, B: { price: -1, at: "x" }, C: "no" })).toEqual({ A: { price: 1.5, at: "x" } });
+    expect(toQuotes(null)).toBeUndefined();
+  });
+});

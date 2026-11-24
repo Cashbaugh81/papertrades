@@ -8,6 +8,7 @@ import type {
   PendingOrder,
   Portfolio,
   PortfolioState,
+  StartQuote,
   Tx,
 } from "@/lib/types";
 import { closeOn, monthStarts, weekStarts, type PriceIndex } from "@/lib/prices";
@@ -51,7 +52,22 @@ type Book = {
   lots: Map<string, Lot[]>;
   /** Gains and losses from sales so far. */
   realized: RealizedGain[];
+  /** Live purchase prices taken when a live portfolio was created (see Portfolio.startQuotes). */
+  quotes?: Record<string, StartQuote>;
 };
+
+/**
+ * The price a mix buys `t` at on `day`: a live quote taken that day if there is
+ * one, else the close. A live price is carried as its ratio to that day's
+ * close, so it stays right when Tiingo later re-adjusts old closes for
+ * dividends and splits.
+ */
+function entryPrice(index: PriceIndex, book: Book, t: string, day: string): { px?: number; live: boolean } {
+  const close = index.close(t, day);
+  const q = book.quotes?.[t];
+  if (!q || close === undefined || !(close > 0) || nyDate(Date.parse(q.at)) !== day) return { px: close, live: false };
+  return { px: close * (q.ratio ?? q.price / close), live: true };
+}
 
 /** Record a purchase as a tax lot. */
 function addLot(book: Book, ticker: string, day: string, units: number, cost: number): void {
@@ -202,17 +218,26 @@ function applyRebalance(index: PriceIndex, book: Book, tx: Tx, day: string): Fil
   // A mix bought by shares can add up to less than 100%: the rest stays cash.
   const invested = Object.values(weights).reduce((a, w) => a + w, 0);
   book.cash = invested < 1 - 1e-9 ? total * (1 - invested) : 0;
+  const live: string[] = [];
   for (const [t, w] of Object.entries(weights)) {
     // rebalanceDay guarantees a close, unless the ticker hasn't started trading.
-    const px = index.close(t, day);
+    const { px, live: atLive } = entryPrice(index, book, t, day);
     if (px !== undefined && px > 0) {
       book.units.set(t, (total * w) / px);
       addLot(book, t, day, (total * w) / px, total * w);
+      if (atLive) live.push(t);
     } else book.waiting.set(t, total * w);
   }
   book.weights = weights;
   const waited = [...book.waiting.keys()].sort();
-  return { date: day, price: 0, units: 0, amount: total, ...(waited.length ? { waited } : {}) };
+  return {
+    date: day,
+    price: 0,
+    units: 0,
+    amount: total,
+    ...(waited.length ? { waited } : {}),
+    ...(live.length ? { live: live.sort() } : {}),
+  };
 }
 
 function applyOrder(
@@ -320,6 +345,7 @@ export function computeState(
     waiting: new Map(),
     lots: new Map(),
     realized: [],
+    quotes: p.startQuotes,
   };
   /** Each holding's value and the cash (incl. cash set aside) at each close. */
   const byTicker: Record<string, number[]> = {};
@@ -741,7 +767,13 @@ function timeline(p: Portfolio, fills: Record<string, Fill>, boughtIn: Record<st
     const f = fills[tx.id];
     if (!f) continue;
     if (tx.kind === "rebalance") {
-      out.push({ date: f.date, kind: first ? "start" : "mix", weights: tx.weights, amount: f.amount });
+      const live = f.live?.length
+        ? {
+            prices: Object.fromEntries(f.live.map((t) => [t, p.startQuotes![t].price])),
+            at: f.live.map((t) => p.startQuotes![t].at).sort()[0],
+          }
+        : undefined;
+      out.push({ date: f.date, kind: first ? "start" : "mix", weights: tx.weights, amount: f.amount, ...(live ? { live } : {}) });
       if (f.waited?.length) out.push({ date: f.date, kind: "waiting", tickers: f.waited });
       first = false;
     } else if (tx.kind === "buy" || tx.kind === "sell") {
