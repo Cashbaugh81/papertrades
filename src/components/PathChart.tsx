@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import type { PortfolioState } from "@/lib/types";
 import { humanDate, money, shortDate } from "@/lib/ledger";
+import RangeBar, { useRange } from "@/components/RangeBar";
+import { windowState } from "@/lib/ranges";
 
 /**
  * One colour per portfolio slot (1–10). Slots 1–3 are Chris's bold blue, red
@@ -41,13 +43,23 @@ type Props = {
 
 type Hover = { x: number; i: number } | null;
 
+/** "Nov 3" */
+const dayLabel = (d: string) =>
+  new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+
 export default function PathChart({ states: allStates, baselineId, height = 300, colors, labels, mixes }: Props) {
   const [hover, setHover] = useState<Hover>(null);
   const [legendOpen, setLegendOpen] = useState<string | null>(null);
   // Portfolios switched off by clicking their legend entry. The chart (and its
   // scale) only covers the ones still on; at least one always stays on.
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-  const states = useMemo(() => allStates.filter((s) => !hidden.has(s.id)), [allStates, hidden]);
+  // Time range: what's available depends on how far back any portfolio goes.
+  const allDates = allStates.flatMap((s) => (s.dates.length ? [s.dates[0], s.dates[s.dates.length - 1]] : []));
+  const range = useRange(allDates.length ? allDates.reduce((a, b) => (a < b ? a : b)) : undefined, allDates.length ? allDates.reduce((a, b) => (a > b ? a : b)) : undefined);
+  const states = useMemo(
+    () => allStates.filter((s) => !hidden.has(s.id)).map((s) => windowState(s, range.from)),
+    [allStates, hidden, range.from],
+  );
   const nameOf = (s: { id: string; name: string }) => labels?.[s.id] ?? s.name;
   const colorOf = (id: string) =>
     colors?.[id] ?? STROKE[Math.max(0, allStates.findIndex((s) => s.id === id)) % STROKE.length];
@@ -133,12 +145,13 @@ export default function PathChart({ states: allStates, baselineId, height = 300,
     const ticks = 4;
     const yTicks = Array.from({ length: ticks + 1 }, (_, i) => min + ((max - min) / ticks) * i);
 
-    // X labels: ~5 evenly spaced dates.
+    // X labels: ~5 evenly spaced dates; by day ("Nov 3") over a few months or less.
+    const shortRange = Date.parse(dates[dates.length - 1]) - Date.parse(dates[0]) <= 120 * 86_400_000;
     const xTicks: { i: number; label: string }[] = [];
     const n = 5;
     for (let k = 0; k < n; k++) {
       const i = Math.round((k / (n - 1)) * (dates.length - 1));
-      xTicks.push({ i, label: shortDate(dates[i]) });
+      xTicks.push({ i, label: shortRange ? dayLabel(dates[i]) : shortDate(dates[i]) });
     }
 
     return { dates, series, min, max, W, H, m, x, y, lines, band, yTicks, xTicks, idx };
@@ -157,6 +170,9 @@ export default function PathChart({ states: allStates, baselineId, height = 300,
 
   return (
     <div className="relative">
+      <div className="mb-2 flex justify-end">
+        <RangeBar value={range.key} onChange={(k) => { setHover(null); range.setKey(k); }} available={range.available} testId="paths-range" />
+      </div>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         className="w-full"

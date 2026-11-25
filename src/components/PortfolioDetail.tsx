@@ -1,5 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { nyTime, SHARE_DECIMALS } from "@/components/MixEditor";
+import RangeBar, { useRange } from "@/components/RangeBar";
+import { windowState } from "@/lib/ranges";
 import Stat from "@/components/Stat";
 import { humanDate, mixLabel, money, pct, signedPct, TAX_RATES } from "@/lib/ledger";
 import type { PortfolioState, TimelineEvent } from "@/lib/types";
@@ -235,7 +237,29 @@ const MAX_POINTS = 360;
  * line while there is any. Dashed verticals mark the start, mix changes, waits
  * in cash and buy-ins. Hover (or tap) for the values on a day.
  */
-function HoldingsChart({ state }: { state: PortfolioState }) {
+function HoldingsChart({ state: full }: { state: PortfolioState }) {
+  const range = useRange(full.dates[0], full.dates[full.dates.length - 1]);
+  const state = useMemo(() => windowState(full, range.from), [full, range.from]);
+  // Holdings already owned when the window starts: their lines don't get a "bought here" dot.
+  const carried = useMemo(() => {
+    const i0 = full.dates.length - state.dates.length;
+    const out = new Set<string>();
+    if (i0 <= 0) return out;
+    for (const [t, v] of Object.entries(full.byTicker)) if ((v[i0 - 1] ?? 0) > 0.5) out.add(t);
+    if ((full.cashSeries[i0 - 1] ?? 0) > 0.5) out.add("Cash");
+    return out;
+  }, [full, state]);
+  return (
+    <div>
+      <div className="mb-2 flex justify-end">
+        <RangeBar value={range.key} onChange={range.setKey} available={range.available} testId="detail-range" />
+      </div>
+      <HoldingsLines state={state} carried={carried} zoom={range.key !== "All"} />
+    </div>
+  );
+}
+
+function HoldingsLines({ state, carried, zoom }: { state: PortfolioState; carried: Set<string>; zoom: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<number | null>(null);
   const n = state.dates.length;
@@ -273,19 +297,25 @@ function HoldingsChart({ state }: { state: PortfolioState }) {
       return { ...s, pieces };
     });
     const hi = Math.max(1, ...series.map((s) => Math.max(0, ...s.values)));
-    return { lines, hi: niceCeil(hi) };
-  }, [state, n]);
+    if (!zoom) return { lines, hi: niceCeil(hi), lo: 0 };
+    // A shorter range zooms in on the values it shows, in tidy steps, so a week's moves are visible.
+    const held = series.flatMap((s) => s.values.filter((v) => v > 0.5));
+    const min = held.length ? Math.min(...held) : 0;
+    const tick = niceCeil(Math.max(1, (hi - min) / 4));
+    const lo = Math.max(0, Math.floor(min / tick) * tick);
+    return { lines, lo, hi: Math.max(lo + tick, Math.ceil(hi / tick) * tick) };
+  }, [state, n, zoom]);
 
   if (!model) return <p className="text-[13px] text-muted">The chart appears after the first close.</p>;
 
-  const { lines, hi } = model;
+  const { lines, hi, lo } = model;
   const W = 1000;
   const H = 260;
   const PAD = 10; // room at the top so the highest line isn't clipped
   const x = (i: number) => (i / (n - 1)) * W;
-  const y = (v: number) => H - (v / hi) * (H - PAD);
+  const y = (v: number) => H - ((v - lo) / (hi - lo)) * (H - PAD);
   const yPct = (v: number) => (y(v) / H) * 100;
-  const grid = [0.25, 0.5, 0.75, 1].map((f) => f * hi);
+  const grid = [0.25, 0.5, 0.75, 1].map((f) => lo + f * (hi - lo));
 
   // One line per day; events on the same day share it ("Start · SNOW in cash").
   const markers: { i: number; key: string; label: string; row: number }[] = [];
@@ -386,7 +416,7 @@ function HoldingsChart({ state }: { state: PortfolioState }) {
 
         {/* A dot where each line starts (the day it was bought), and on hover. */}
         {lines.map((l) =>
-          l.pieces.map((pts, k) => (
+          l.pieces.map((pts, k) => (pts[0] === 0 && carried.has(l.key)) ? null : (
             <span
               key={`start-${l.key}-${k}`}
               aria-hidden
