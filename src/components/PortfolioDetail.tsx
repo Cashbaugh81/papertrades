@@ -3,7 +3,8 @@ import { nyTime, SHARE_DECIMALS } from "@/components/MixEditor";
 import RangeBar, { useRange } from "@/components/RangeBar";
 import { windowState } from "@/lib/ranges";
 import Stat from "@/components/Stat";
-import { humanDate, mixLabel, money, pct, signedPct, TAX_RATES } from "@/lib/ledger";
+import { gainOn, humanDate, mixLabel, money, pct, signedPct, TAX_RATES } from "@/lib/ledger";
+import { GainBadge } from "@/components/PathChart";
 import type { PortfolioState, TimelineEvent } from "@/lib/types";
 
 /**
@@ -453,7 +454,7 @@ function HoldingsLines({ state, carried, zoom }: { state: PortfolioState; carrie
 
         {h !== null && (
           <div
-            className={`pointer-events-none absolute top-9 z-10 w-48 rounded-sm border border-rule bg-surface p-2 text-[12px] shadow-sm ${
+            className={`pointer-events-none absolute top-9 z-10 w-56 rounded-sm border border-rule bg-surface p-2 text-[12px] shadow-sm ${
               h / (n - 1) > 0.6 ? "-translate-x-full" : ""
             }`}
             style={{ left: `calc(${(h / (n - 1)) * 100}% ${h / (n - 1) > 0.6 ? "- 8px" : "+ 8px"})` }}
@@ -474,7 +475,10 @@ function HoldingsLines({ state, carried, zoom }: { state: PortfolioState; carrie
               ))}
             <div className="mt-1 flex justify-between border-t border-rule pt-1 font-medium">
               <span>Worth</span>
-              <span className="num">{money(state.values[h])}</span>
+              <span className="flex items-baseline gap-2">
+                <span className="num">{money(state.values[h])}</span>
+                <GainBadge f={gainOn(state.values[h], state.investedSeries[h])} />
+              </span>
             </div>
           </div>
         )}

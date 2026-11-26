@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { PortfolioState } from "@/lib/types";
-import { humanDate, money, shortDate } from "@/lib/ledger";
+import { gainOn, humanDate, money, shortDate, signedPct } from "@/lib/ledger";
 import RangeBar, { useRange } from "@/components/RangeBar";
 import { windowState } from "@/lib/ranges";
 
@@ -42,6 +42,17 @@ type Props = {
 };
 
 type Hover = { x: number; i: number } | null;
+
+/** "+12.4%" in green or "−3.1%" in red: the sign carries it, the colour backs it up. */
+export function GainBadge({ f }: { f?: number }) {
+  if (f === undefined || !Number.isFinite(f)) return null;
+  const tone = f > 0.0005 ? "text-gain" : f < -0.0005 ? "text-loss" : "text-muted";
+  return (
+    <span className={`num w-[3.6em] text-right text-[11px] font-medium ${tone}`} data-testid="gain-pct">
+      {signedPct(f)}
+    </span>
+  );
+}
 
 /** "Nov 3" */
 const dayLabel = (d: string) =>
@@ -85,13 +96,20 @@ export default function PathChart({ states: allStates, baselineId, height = 300,
 
     // Carry the last known value forward so a portfolio that starts later does not
     // silently vanish from the left of the chart.
-    const series = maps.map((m) => {
+    const carry = (m: Map<string, number>) => {
       let last = NaN;
       return dates.map((d) => {
         const v = m.get(d);
         if (v !== undefined) last = v;
         return last;
       });
+    };
+    const series = maps.map(carry);
+    // Cash put in by each day, for the gain or loss in the hover box.
+    const cashIn = states.map((s) => {
+      const m = new Map<string, number>();
+      s.dates.forEach((d, i) => m.set(d, s.investedSeries?.[i] ?? NaN));
+      return carry(m);
     });
 
     let lo = Infinity;
@@ -154,7 +172,7 @@ export default function PathChart({ states: allStates, baselineId, height = 300,
       xTicks.push({ i, label: shortRange ? dayLabel(dates[i]) : shortDate(dates[i]) });
     }
 
-    return { dates, series, min, max, W, H, m, x, y, lines, band, yTicks, xTicks, idx };
+    return { dates, series, cashIn, min, max, W, H, m, x, y, lines, band, yTicks, xTicks, idx };
   }, [states, height, colors]);
 
   if (!model) {
@@ -165,7 +183,7 @@ export default function PathChart({ states: allStates, baselineId, height = 300,
     );
   }
 
-  const { dates, series, W, H, m, x, y, lines, band, yTicks, xTicks, idx } = model;
+  const { dates, series, cashIn, W, H, m, x, y, lines, band, yTicks, xTicks, idx } = model;
   const hoverI = hover ? idx[Math.min(idx.length - 1, hover.i)] : null;
 
   return (
@@ -302,10 +320,16 @@ export default function PathChart({ states: allStates, baselineId, height = 300,
                   />
                   <span className="truncate">{nameOf(s)}</span>
                 </span>
-                <span className="num font-medium">{money(v)}</span>
+                <span className="flex items-baseline gap-2">
+                  <span className="num font-medium">{money(v)}</span>
+                  <GainBadge f={gainOn(v, cashIn[si][hoverI])} />
+                </span>
               </div>
             );
           })}
+          <div className="mt-1.5 border-t border-rule pt-1.5 text-[10px] leading-snug text-muted">
+            % = gain or loss on the cash put in so far, so weekly deposits don't count as growth.
+          </div>
         </div>
       )}
 
