@@ -40,6 +40,7 @@ export function rowToTx(r: TransactionRow): Tx {
     ticker: r.ticker ?? undefined,
     amount: num(r.amount),
     units: num(r.units),
+    ...(num(r.fraction) !== undefined ? { fraction: num(r.fraction) } : {}),
     note: r.note ?? undefined,
     weights: r.kind === "rebalance" ? toWeights(r.weights) : undefined,
   };

@@ -4,7 +4,9 @@ import { Copy, History, Plus, X } from "lucide-react";
 import MixEditor, { mixFromRows, nyTime, rowsFromMix, type Row } from "@/components/MixEditor";
 import PathChart, { SERIES_COLORS } from "@/components/PathChart";
 import { ErrorNote, MAX_PORTFOLIOS } from "@/pages/SetupPage";
-import type { ActiveSet, Column, Limits, Mix, TickerInfo } from "@/lib/api";
+import type { ActiveSet, Column, Limits, Mix, TickerInfo, TradeRequest, TradeResult } from "@/lib/api";
+import type { PriceIndex } from "@/lib/prices";
+import { problems as tradeProblems } from "@/lib/trades";
 import UpgradeDialog, { type UpgradeReason } from "@/components/UpgradeDialog";
 import LessonCards from "@/components/LessonCards";
 import PortfolioName, { portfolioName } from "@/components/PortfolioName";
@@ -12,7 +14,7 @@ import Stat from "@/components/Stat";
 import PortfolioDetail from "@/components/PortfolioDetail";
 
 import { ordinal, rankTints, tintColors, type RankTint } from "@/lib/rankTint";
-import { humanDate, mixLabel, money, pct, signedPct } from "@/lib/ledger";
+import { computeState, humanDate, mixLabel, money, pct, signedPct } from "@/lib/ledger";
 import type { Portfolio, PortfolioState, Tx } from "@/lib/types";
 
 type Props = {
@@ -37,6 +39,10 @@ type Props = {
   onUpgraded?: () => void;
   /** Open a new portfolio holding this one's mix (set by DashboardPage for its cards). */
   onClone?: (fromSlot: number, mix: Mix | undefined) => void;
+  /** The prices the portfolios are computed from (for trade previews and checks). */
+  index: PriceIndex;
+  onPlaceTrade: (portfolioId: string, trade: TradeRequest) => Promise<TradeResult>;
+  onDeleteTrade: (txId: string) => Promise<TradeResult>;
 };
 
 export default function DashboardPage(props: Props) {
@@ -248,6 +254,7 @@ function ColumnCard({
   expanded = false,
   onOpen,
   onCloseDetail,
+  ...props
 }: Props & {
   column: Column;
   state: PortfolioState;
@@ -267,6 +274,7 @@ function ColumnCard({
 
   const p = column.portfolio;
   const firstMix = p.tx.find((t) => t.kind === "rebalance");
+  const trades = p.tx.filter((t) => t.kind === "buy" || t.kind === "sell");
   const waitingToStart = !!firstMix && state.pending.some((o) => o.txId === firstMix.id);
   const pendingChange = state.pending.find((o) => o.kind === "rebalance" && o.txId !== firstMix?.id);
   const mix = state.currentWeights ?? firstMix?.weights;
@@ -301,6 +309,16 @@ function ColumnCard({
   async function save() {
     const r = mixFromRows(rows, info, set.initial); // the new mix replays from the start date
     if (!r.mix) return setError(r.problem ?? "Check the mix.");
+    // Trades stay when the starting mix changes: make sure they all still work with it.
+    if (trades.length && firstMix) {
+      const next = { ...p, tx: [{ ...firstMix, weights: r.mix }, ...p.tx.filter((t) => t.kind !== "rebalance")] };
+      const broken = tradeProblems(computeState(props.index, next, props.index.lastDate)).filter((x) => trades.some((t) => t.id === x.txId));
+      if (broken.length) {
+        return setError(
+          `With this mix, ${broken.length === 1 ? "a trade" : `${broken.length} trades`} wouldn't work: ${broken.map((b) => b.reason).join(" ")} Delete ${broken.length === 1 ? "it" : "them"} first, or pick a different mix.`,
+        );
+      }
+    }
     setBusy(true);
     setError(null);
     try {
@@ -398,7 +416,26 @@ function ColumnCard({
 
       {expanded ? (
         <div className="mt-5 border-t border-rule pt-5">
-          <PortfolioDetail state={state} baseline={baseline} startDate={p.startDate} waitingToStart={waitingToStart} />
+          <PortfolioDetail
+            state={state}
+            baseline={baseline}
+            startDate={p.startDate}
+            waitingToStart={waitingToStart}
+            trading={
+              column.slot === 1
+                ? undefined
+                : {
+                    index: props.index,
+                    portfolio: p,
+                    info,
+                    lookup,
+                    premium: limits.plan !== "free",
+                    onUpgrade: () => onUpgrade?.("trades"),
+                    onPlace: (t) => props.onPlaceTrade(p.id, t),
+                    onDelete: props.onDeleteTrade,
+                  }
+            }
+          />
         </div>
       ) : (
       <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-rule pt-3 text-[12px]">
@@ -478,7 +515,9 @@ function ColumnCard({
                 </div>
                 <p className="max-w-[560px] text-[11px] leading-snug text-muted">
                   Saving restarts this portfolio as if it had held the new mix since {humanDate(p.startDate)}, with the same
-                  money going in. The old mix is noted in the decision log.
+                  money going in.
+                  {trades.length === 1 ? " Your trade stays and happens on the same date." : trades.length > 1 ? ` Your ${trades.length} trades stay and happen on the same dates.` : ""} The
+                  old mix is noted in the decision log.
                 </p>
                 {error && <ErrorNote text={error} />}
               </>
@@ -668,6 +707,7 @@ function DecisionLog({ set, states, onCancelTx }: { set: ActiveSet; states: Map<
       const s = states.get(c.portfolio.id)!;
       const mixes = c.portfolio.tx.filter((t) => t.kind === "rebalance");
       mixes.forEach((tx, i) => out.push({ tx, column: c, first: i === 0, state: s }));
+      for (const tx of c.portfolio.tx) if (tx.kind === "buy" || tx.kind === "sell") out.push({ tx, column: c, first: false, state: s });
     }
     return out.sort((a, b) => ((b.tx.placedAt ?? b.tx.date) < (a.tx.placedAt ?? a.tx.date) ? -1 : 1));
   }, [set, states]);
@@ -689,8 +729,23 @@ function DecisionLog({ set, states, onCancelTx }: { set: ActiveSet; states: Map<
               <div className="min-w-0">
                 <span className="text-muted">{humanDate(tx.date)} · </span>
                 <span className="font-medium">{portfolioName(column.slot, column.customName, latestMix(column))}</span>
-                <span className="text-muted"> {first ? "started with" : "changed to"} </span>
-                <span>{mixLabel(tx.weights)}</span>
+                {tx.kind === "buy" || tx.kind === "sell" ? (
+                  <>
+                    <span className="text-muted"> {tx.kind === "buy" ? "bought" : "sold"} </span>
+                    <span>
+                      {tx.kind === "sell" && tx.fraction !== undefined
+                        ? tx.fraction >= 1 - 1e-9
+                          ? `all of ${tx.ticker}`
+                          : `${Math.round(tx.fraction * 1000) / 10}% of ${tx.ticker}`
+                        : `${money(tx.amount ?? 0, 2)} of ${tx.ticker}`}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-muted"> {first ? "started with" : "changed to"} </span>
+                    <span>{mixLabel(tx.weights)}</span>
+                  </>
+                )}
                 {tx.note && <div className="mt-0.5 text-[12px] text-muted">“{tx.note}”</div>}
               </div>
               <div className="shrink-0 text-[12px] text-muted">
@@ -703,6 +758,12 @@ function DecisionLog({ set, states, onCancelTx }: { set: ActiveSet; states: Map<
                       </button>
                     )}
                   </>
+                ) : fill && (tx.kind === "buy" || tx.kind === "sell") ? (
+                  <>
+                    {money(fill.amount, 2)} at the {humanDate(fill.date)} close
+                  </>
+                ) : state.rejections[tx.id] ? (
+                  <span className="text-loss">no longer works</span>
                 ) : fill ? (
                   <>
                     invested {money(fill.amount)} at the {humanDate(fill.date)} close

@@ -16,7 +16,9 @@ import {
   limitsFor,
   type Plan,
   fetchPrices,
+  deleteTrade,
   loadActiveSet,
+  placeTrade,
   mergeBundles,
   SessionEnded,
   signOut,
@@ -310,6 +312,17 @@ function SignedIn({ account }: { account: Account }) {
       onAddColumn={async (slot, mix) => {
         await addColumn(set.id, slot, mix);
         await reload();
+      }}
+      index={index}
+      onPlaceTrade={async (pid, trade) => {
+        const r = await placeTrade(pid, trade);
+        if (r.ok) await reload();
+        return r;
+      }}
+      onDeleteTrade={async (txId) => {
+        const r = await deleteTrade(txId);
+        if (r.ok) await reload();
+        return r;
       }}
       onCancelTx={(txId) => {
         cancelTx(txId)

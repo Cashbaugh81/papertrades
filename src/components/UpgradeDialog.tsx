@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { BarChart3, Check, Layers, Repeat, X } from "lucide-react";
 import { joinWaitlist } from "@/lib/api";
 
-export type UpgradeReason = "portfolios" | "tickers";
+export type UpgradeReason = "portfolios" | "tickers" | "trades";
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -11,6 +11,7 @@ const BASE = import.meta.env.BASE_URL;
 const LEAD: Record<UpgradeReason, string> = {
   portfolios: "Free accounts compare up to 3 portfolios.",
   tickers: "Free portfolios hold up to 3 stocks or funds each.",
+  trades: "Selling and buying on any date is part of Premium.",
 };
 
 const FEATURES = [

@@ -119,6 +119,8 @@ export type Fill = {
   waited?: string[];
   /** For a rebalance: tickers bought at a live price during the day, not the close. */
   live?: string[];
+  /** For a sale: gain (or loss, negative) on the shares sold, split by holding period. */
+  gain?: { shortTerm: number; longTerm: number };
 };
 
 export type PendingOrder = {
@@ -234,4 +236,12 @@ export type TimelineEvent = {
   amount?: number;
   /** For a start or mix change bought partly at live prices: the price paid per ticker, and when. */
   live?: { prices: Record<string, number>; at: string };
+  /** For a buy or sell: the trade it came from, the price per share and the shares. */
+  txId?: string;
+  price?: number;
+  units?: number;
+  /** For a sell: share of the holding sold (1 = all of it), if sold that way. */
+  fraction?: number;
+  /** For a sell: gain or loss, by holding period. */
+  gain?: { shortTerm: number; longTerm: number };
 };

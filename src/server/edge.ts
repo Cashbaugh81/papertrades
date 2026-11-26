@@ -7,6 +7,8 @@ export { buildIndex } from "@/lib/prices";
 export { lastCutoff, nyDate, nyHour } from "@/lib/market";
 export { CALENDAR_TICKER, rowToPortfolio, seriesToBundle, tickersFor } from "@/lib/rows";
 export { settle } from "@/server/settle";
+export { computeState } from "@/lib/ledger";
+export { checkDelete, checkTrade, tickersHeldAtOnce } from "@/lib/trades";
 export {
   HISTORY_START,
   incrementalStart,

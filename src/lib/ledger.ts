@@ -313,12 +313,15 @@ function applyOrder(
     units = Math.min(want, held);
   }
   book.cash += units * px;
+  const from = book.realized.length;
   sellLots(book, t, units, px, day);
+  const gain = { shortTerm: 0, longTerm: 0 };
+  for (const r of book.realized.slice(from)) gain[r.longTerm ? "longTerm" : "shortTerm"] += r.gain;
   const left = held - units;
   // Snap dust from floating-point division to zero so "sell everything" does.
   book.units.set(t, left < 1e-9 ? 0 : left);
   book.traded = true;
-  return { date: day, price: px, units, amount: units * px };
+  return { date: day, price: px, units, amount: units * px, gain };
 }
 
 /**
@@ -880,7 +883,17 @@ function timeline(p: Portfolio, fills: Record<string, Fill>, boughtIn: Record<st
       if (f.waited?.length) out.push({ date: f.date, kind: "waiting", tickers: f.waited });
       first = false;
     } else if (tx.kind === "buy" || tx.kind === "sell") {
-      out.push({ date: f.date, kind: tx.kind, tickers: [tx.ticker!], amount: f.amount });
+      out.push({
+        date: f.date,
+        kind: tx.kind,
+        tickers: [tx.ticker!],
+        amount: f.amount,
+        txId: tx.id,
+        price: f.price,
+        units: f.units,
+        ...(tx.fraction !== undefined ? { fraction: tx.fraction } : {}),
+        ...(f.gain ? { gain: f.gain } : {}),
+      });
     }
   }
   for (const [t, day] of Object.entries(boughtIn)) out.push({ date: day, kind: "bought_in", tickers: [t] });

@@ -1,11 +1,28 @@
 import { useMemo, useRef, useState } from "react";
-import { nyTime, SHARE_DECIMALS } from "@/components/MixEditor";
+import TradeDialog, { type TradeRequest, type TradeResult } from "@/components/TradeDialog";
+import type { TickerInfo } from "@/lib/api";
+import type { PriceIndex } from "@/lib/prices";
+import { checkDelete, problems as tradeProblems } from "@/lib/trades";
+import { nyTime, SHARE_DECIMALS, shareText } from "@/components/MixEditor";
 import RangeBar, { useRange } from "@/components/RangeBar";
 import { windowState } from "@/lib/ranges";
 import Stat from "@/components/Stat";
 import { gainOn, humanDate, mixLabel, money, pct, signedPct, TAX_RATES } from "@/lib/ledger";
 import { GainBadge } from "@/components/PathChart";
-import type { PortfolioState, TimelineEvent } from "@/lib/types";
+import type { Portfolio, PortfolioState, TimelineEvent } from "@/lib/types";
+
+/** Buying and selling inside an opened portfolio (Premium; never portfolio 1). */
+export type Trading = {
+  index: PriceIndex;
+  portfolio: Portfolio;
+  info: Record<string, TickerInfo>;
+  lookup: (ticker: string) => Promise<unknown>;
+  /** False on a free account: Trade opens the upgrade window instead. */
+  premium: boolean;
+  onUpgrade: () => void;
+  onPlace: (t: TradeRequest) => Promise<TradeResult>;
+  onDelete: (txId: string) => Promise<TradeResult>;
+};
 
 /**
  * The inside of an opened portfolio: its numbers (with biggest bump next to
@@ -23,13 +40,19 @@ export default function PortfolioDetail({
   baseline,
   startDate,
   waitingToStart,
+  trading,
 }: {
   state: PortfolioState;
   /** Portfolio 1's state, for "vs portfolio 1" (absent on portfolio 1 itself). */
   baseline?: PortfolioState;
   startDate: string;
   waitingToStart: boolean;
+  /** Set when this portfolio can trade (not portfolio 1). */
+  trading?: Trading;
 }) {
+  const [dialog, setDialog] = useState<{ kind: "sell"; ticker: string } | { kind: "buy" } | null>(null);
+  const openTrade = (d: { kind: "sell"; ticker: string } | { kind: "buy" }) =>
+    trading?.premium ? setDialog(d) : trading?.onUpgrade();
   const spread = baseline && !waitingToStart ? state.returnOnInvested - baseline.returnOnInvested : undefined;
   const t = state.taxes;
   const span = (d?: [string, string]) => (d ? `${humanDate(d[0])} – ${humanDate(d[1])}` : undefined);
@@ -97,10 +120,11 @@ export default function PortfolioDetail({
           shortTerm={t.realizedShort}
           longTerm={t.realizedLong}
           testId="tax-actual"
+          byYear={t.byYear}
           note={
             state.realized.length
-              ? "On the sales so far, including mix switches."
-              : "Nothing has been sold yet, and tax is only owed when you sell. Changing the mix replays the portfolio from its start, so it doesn't count as a sale."
+              ? "On the sales so far, owed for the year of each sale. Gains and losses offset within a year; a loss isn't carried into later years here."
+              : "Nothing has been sold yet, and tax is only owed when you sell. Changing the starting mix replays the portfolio from its start, so it doesn't count as a sale."
           }
         />
       </div>
@@ -120,8 +144,23 @@ export default function PortfolioDetail({
         <HoldingsChart state={state} />
       </section>
 
-      {/* ---- holdings now ---- */}
-      <HoldingsTable state={state} />
+      {/* ---- holdings now (with Trade / Buy) ---- */}
+      <HoldingsTable state={state} onTrade={trading ? openTrade : undefined} />
+
+      {/* ---- trades ---- */}
+      {trading && <TradesList state={state} trading={trading} onBuy={() => openTrade({ kind: "buy" })} />}
+      {trading && (
+        <TradeDialog
+          open={dialog}
+          onClose={() => setDialog(null)}
+          index={trading.index}
+          portfolio={trading.portfolio}
+          state={state}
+          info={trading.info}
+          lookup={trading.lookup}
+          onPlace={trading.onPlace}
+        />
+      )}
 
       {/* ---- timeline ---- */}
       <section aria-labelledby="timeline-title">
@@ -150,6 +189,7 @@ function TaxCard({
   longTerm,
   note,
   testId,
+  byYear,
 }: {
   title: string;
   kicker: string;
@@ -158,6 +198,8 @@ function TaxCard({
   longTerm: number;
   note: string;
   testId: string;
+  /** Sales by tax year (shown when there are any). */
+  byYear?: { year: number; realizedShort: number; realizedLong: number; tax: number }[];
 }) {
   const gain = (n: number) => `${n >= 0 ? "" : "−"}${money(Math.abs(n))}`;
   return (
@@ -179,6 +221,19 @@ function TaxCard({
           <dd className="num">{gain(longTerm)}</dd>
         </div>
       </dl>
+      {byYear && byYear.length > 0 && (
+        <table className="mt-2 w-full border-collapse text-[12px]" data-testid={`${testId}-years`}>
+          <tbody>
+            {byYear.map((y) => (
+              <tr key={y.year} className="border-t border-rule/60">
+                <td className="py-1 text-muted">{y.year}</td>
+                <td className="num py-1 text-right text-muted">gains {gain(y.realizedShort + y.realizedLong)}</td>
+                <td className="num py-1 text-right">tax {money(y.tax)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       <p className="mb-0 mt-2 text-[11px] leading-snug text-muted">{note}</p>
     </div>
   );
@@ -204,9 +259,28 @@ function eventText(e: TimelineEvent): string {
     case "bought_in":
       return `${names} started trading, and the cash set aside for it was invested at that day's close.`;
     case "buy":
-      return `Bought ${money(e.amount ?? 0)} of ${names}.`;
-    case "sell":
-      return `Sold ${money(e.amount ?? 0)} of ${names}.`;
+      return e.units && e.price
+        ? `Bought ${shareText(e.units)} shares of ${names} at ${money(e.price, 2)} for ${money(e.amount ?? 0, 2)}.`
+        : `Bought ${money(e.amount ?? 0)} of ${names}.`;
+    case "sell": {
+      const what =
+        e.fraction !== undefined && e.fraction >= 1 - 1e-9
+          ? `all of ${names}`
+          : e.fraction !== undefined
+            ? `${Math.round(e.fraction * 1000) / 10}% of ${names}`
+            : names;
+      const shares = e.units && e.price ? ` (${shareText(e.units)} shares at ${money(e.price, 2)})` : "";
+      const g = e.gain ? e.gain.shortTerm + e.gain.longTerm : undefined;
+      const term =
+        e.gain && Math.abs(e.gain.longTerm) > 0.005 && Math.abs(e.gain.shortTerm) > 0.005
+          ? "short- and long-term"
+          : e.gain && Math.abs(e.gain.longTerm) > 0.005
+            ? "long-term"
+            : "short-term";
+      return `Sold ${what}${shares} for ${money(e.amount ?? 0, 2)}${
+        g === undefined ? "" : `: ${g >= 0 ? "gain" : "loss"} ${money(Math.abs(g), 2)}, ${term}`
+      }. The money went to cash.`;
+    }
   }
 }
 
@@ -224,7 +298,9 @@ function markerLabel(e: TimelineEvent): string {
     case "buy":
       return `Bought ${(e.tickers ?? []).join(", ")}`;
     case "sell":
-      return `Sold ${(e.tickers ?? []).join(", ")}`;
+      return e.fraction !== undefined && e.fraction < 1 - 1e-9
+        ? `Sold ${Math.round(e.fraction * 100)}% ${(e.tickers ?? []).join(", ")}`
+        : `Sold ${e.fraction !== undefined ? "all " : ""}${(e.tickers ?? []).join(", ")}`;
   }
 }
 
@@ -514,9 +590,18 @@ function niceCeil(v: number): number {
   return 10 * p;
 }
 
-function HoldingsTable({ state }: { state: PortfolioState }) {
+function HoldingsTable({
+  state,
+  onTrade,
+}: {
+  state: PortfolioState;
+  /** Set when trading is offered: Trade on each holding, Buy on the cash. */
+  onTrade?: (d: { kind: "sell"; ticker: string } | { kind: "buy" }) => void;
+}) {
   const waiting = Object.entries(state.waiting);
-  if (!state.holdings.length && !waiting.length) return null;
+  if (!state.holdings.length && !waiting.length && !(state.cash > 0.5)) return null;
+  const btn =
+    "rounded-sm border border-rule px-2 py-0.5 text-[11px] font-medium text-ink hover:border-ink/40 hover:bg-paper";
   return (
     <section aria-labelledby="holdings-title">
       <h3 id="holdings-title" className="mb-2 text-[14px] font-medium">
@@ -532,6 +617,7 @@ function HoldingsTable({ state }: { state: PortfolioState }) {
               <th className="py-1.5 pr-3 text-right font-medium">Worth</th>
               <th className="py-1.5 pr-3 text-right font-medium">Paid</th>
               <th className="py-1.5 text-right font-medium">Gain</th>
+              {onTrade && <th className="w-[64px] py-1.5" aria-label="Trade" />}
             </tr>
           </thead>
           <tbody>
@@ -549,6 +635,13 @@ function HoldingsTable({ state }: { state: PortfolioState }) {
                     {money(Math.abs(gain))}
                     {h.cost > 0 ? ` (${signedPct(gain / h.cost)})` : ""}
                   </td>
+                  {onTrade && (
+                    <td className="py-1 pl-3 text-right">
+                      <button type="button" className={btn} onClick={() => onTrade({ kind: "sell", ticker: h.ticker })} data-testid={`trade-${h.ticker}`}>
+                        Trade
+                      </button>
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -562,6 +655,7 @@ function HoldingsTable({ state }: { state: PortfolioState }) {
                 <td className="py-1.5 text-right" colSpan={2}>
                   held as cash
                 </td>
+                {onTrade && <td />}
               </tr>
             ))}
             {state.cash > 0.5 && (
@@ -572,11 +666,114 @@ function HoldingsTable({ state }: { state: PortfolioState }) {
                 </td>
                 <td className="num py-1.5 pr-3 text-right">{money(state.cash)}</td>
                 <td className="py-1.5 text-right" colSpan={2} />
+                {onTrade && (
+                  <td className="py-1 pl-3 text-right">
+                    <button type="button" className={btn} onClick={() => onTrade({ kind: "buy" })} data-testid="trade-cash">
+                      Buy
+                    </button>
+                  </td>
+                )}
               </tr>
             )}
           </tbody>
         </table>
       </div>
+    </section>
+  );
+}
+
+/**
+ * The portfolio's buys and sells, newest first, each with Delete. Deleting is
+ * checked first (same engine as the server): a sale whose money a later
+ * purchase uses can't go. Trades that no longer work (e.g. after changing the
+ * starting mix) are flagged at the top.
+ */
+function TradesList({ state, trading, onBuy }: { state: PortfolioState; trading: Trading; onBuy: () => void }) {
+  const [asking, setAsking] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<{ txId: string; text: string } | null>(null);
+  const trades = state.events.filter((e) => (e.kind === "buy" || e.kind === "sell") && e.txId).reverse();
+  const broken = tradeProblems(state).filter((x) => trading.portfolio.tx.some((t) => t.id === x.txId && (t.kind === "buy" || t.kind === "sell")));
+
+  async function remove(txId: string) {
+    const check = checkDelete(trading.index, trading.portfolio, txId, trading.index.lastDate);
+    if (!check.ok) {
+      setProblem({ txId, text: `Deleting it would stop this from working: ${check.others.map((o) => o.reason).join(" ")} Delete that first.` });
+      setAsking(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await trading.onDelete(txId);
+      if (!r.ok) setProblem({ txId, text: [r.problem, ...(r.others ?? []).map((o) => o.reason)].filter(Boolean).join(" ") });
+      else setProblem(null);
+    } finally {
+      setBusy(false);
+      setAsking(null);
+    }
+  }
+
+  return (
+    <section aria-labelledby="trades-title" data-testid="detail-trades">
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <h3 id="trades-title" className="text-[14px] font-medium">
+          Trades
+        </h3>
+        {state.cash > 0.5 && (
+          <button type="button" onClick={onBuy} className="text-[12px] font-medium text-accent underline underline-offset-2">
+            Buy with cash
+          </button>
+        )}
+      </div>
+      {broken.length > 0 && (
+        <div className="mb-2 rounded-sm border border-loss/40 bg-loss/5 p-2.5 text-[12px] text-loss" role="alert" data-testid="trades-broken">
+          {broken.length === 1 ? "A trade no longer works" : `${broken.length} trades no longer work`}, so {broken.length === 1 ? "it's" : "they're"} left
+          out: {broken.map((b) => b.reason).join(" ")} Delete {broken.length === 1 ? "it" : "them"}, or change the starting mix back.
+        </div>
+      )}
+      {!trades.length && !broken.length ? (
+        <p className="m-0 text-[12px] text-muted">
+          {trading.premium
+            ? "No trades yet. Use Trade on a holding to sell some or all of it on any date; the money becomes cash you can buy with."
+            : "Selling and buying on any date is part of Premium."}
+        </p>
+      ) : (
+        <ol className="m-0 list-none space-y-1.5 p-0 text-[13px]">
+          {trades.map((e) => (
+            <li key={e.txId} className="flex flex-wrap items-baseline gap-x-3 gap-y-1" data-testid="trade-row">
+              <span className="num w-[92px] shrink-0 text-muted">{humanDate(e.date)}</span>
+              <span className="min-w-0 flex-1">{eventText(e)}</span>
+              {asking === e.txId ? (
+                <span className="flex gap-2 text-[12px]">
+                  <button type="button" disabled={busy} onClick={() => remove(e.txId!)} className="font-medium text-loss underline underline-offset-2" data-testid="trade-delete-confirm">
+                    {busy ? "Deleting…" : "Delete it"}
+                  </button>
+                  <button type="button" onClick={() => setAsking(null)} className="text-muted underline underline-offset-2">
+                    Keep
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProblem(null);
+                    setAsking(e.txId!);
+                  }}
+                  className="text-[12px] text-muted underline underline-offset-2 hover:text-ink"
+                  data-testid="trade-delete"
+                >
+                  Delete
+                </button>
+              )}
+              {problem?.txId === e.txId && (
+                <span className="basis-full text-[12px] text-loss" role="alert" data-testid="trade-delete-problem">
+                  {problem?.text}
+                </span>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
     </section>
   );
 }

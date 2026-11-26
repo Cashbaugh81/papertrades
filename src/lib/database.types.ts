@@ -156,6 +156,7 @@ export type Database = {
           fill_price: number | null;
           fill_units: number | null;
           filled_on: string | null;
+          fraction: number | null;
           id: string;
           kind: string;
           note: string | null;

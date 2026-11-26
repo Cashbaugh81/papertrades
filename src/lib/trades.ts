@@ -78,3 +78,14 @@ export function tradingDayFor(state: PortfolioState, date: string): string | und
   const i = dayIndex(state, date);
   return i >= 0 ? state.dates[i] : undefined;
 }
+
+/** The most tickers held (or waiting to start trading) on any one day. */
+export function tickersHeldAtOnce(state: PortfolioState): number {
+  let most = 0;
+  for (let i = 0; i < state.dates.length; i++) {
+    let n = 0;
+    for (const v of Object.values(state.byTicker)) if ((v[i] ?? 0) > 0.5) n++;
+    most = Math.max(most, n);
+  }
+  return most + Object.keys(state.waiting).length;
+}
