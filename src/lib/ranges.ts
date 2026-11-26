@@ -65,6 +65,7 @@ export function windowState(s: PortfolioState, from?: string): PortfolioState {
     ...s,
     dates: cut(s.dates),
     values: cut(s.values),
+    investedSeries: cut(s.investedSeries ?? []),
     byTicker: Object.fromEntries(Object.entries(s.byTicker).map(([t, v]) => [t, cut(v)])),
     cashSeries: cut(s.cashSeries),
     events: s.events.filter((e) => e.date >= s.dates[i0]),

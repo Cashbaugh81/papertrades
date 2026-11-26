@@ -614,3 +614,19 @@ describe("toQuotes", () => {
     expect(toQuotes(null)).toBeUndefined();
   });
 });
+
+describe("cash put in by day, and the gain on it", () => {
+  it("investedSeries adds up the start amount and deposits, day by day", () => {
+    const s = computeState(index, pf({ initial: 1_000, weekly: 100, tx: [{ id: "m", kind: "rebalance", date: dates[0], weights: { AAA: 1 } }] }), dates[30]);
+    expect(s.investedSeries).toHaveLength(s.dates.length);
+    expect(s.investedSeries[0]).toBe(1_000);
+    expect(s.investedSeries[s.investedSeries.length - 1]).toBeCloseTo(s.invested, 9);
+    for (let i = 1; i < s.investedSeries.length; i++) expect(s.investedSeries[i]).toBeGreaterThanOrEqual(s.investedSeries[i - 1]);
+  });
+  it("a deposit isn't growth: $1,100 worth on $1,100 put in is 0%", async () => {
+    const { gainOn } = await import("@/lib/ledger");
+    expect(gainOn(1_100, 1_100)).toBe(0);
+    expect(gainOn(1_045, 1_100)).toBeCloseTo(-0.05, 9);
+    expect(gainOn(10, 0)).toBeUndefined();
+  });
+});

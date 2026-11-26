@@ -133,6 +133,8 @@ export type PortfolioState = {
   thesis: string;
   dates: string[];
   values: number[];
+  /** Cash put in up to and including each day (start amount plus deposits), lined up with `values`. */
+  investedSeries: number[];
   cash: number;
   invested: number;
   value: number;

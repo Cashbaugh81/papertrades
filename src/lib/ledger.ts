@@ -583,6 +583,7 @@ export function computeState(
     thesis: p.thesis,
     dates,
     values,
+    investedSeries: flows.reduce<number[]>((a, f) => (a.push((a[a.length - 1] ?? 0) + f), a), []),
     cash: book.cash,
     availableCash: Math.max(0, book.cash - reserved),
     invested,
@@ -638,6 +639,14 @@ export function humanDate(d: string): string {
     year: "numeric",
     timeZone: "UTC",
   });
+}
+
+/**
+ * Gain or loss on the cash put in so far, as a fraction: worth ÷ cash in − 1.
+ * Weekly deposits raise both, so they don't count as growth.
+ */
+export function gainOn(worth: number, cashIn: number): number | undefined {
+  return cashIn > 0 && Number.isFinite(worth) ? worth / cashIn - 1 : undefined;
 }
 
 export function shortDate(d: string): string {
