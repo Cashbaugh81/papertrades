@@ -46,6 +46,12 @@ export type Tx = {
    */
   price?: number;
   amount?: number;
+  /**
+   * For a sell: the share of the holding to sell, 0–1 (1 = all of it). Trades
+   * are stored as a fraction or as dollars, never as shares: prices are
+   * dividend-adjusted and old ones get rewritten, which would move a share count.
+   */
+  fraction?: number;
   note?: string;
   /** For kind = rebalance: ticker -> fraction, summing to 1. */
   weights?: Record<string, number>;
@@ -182,7 +188,10 @@ export type PortfolioState = {
   /** What happened, in order (for the portfolio's timeline). */
   events: TimelineEvent[];
   /** Orders that reached their close but could not be filled, by transaction id. */
+  /** Orders that couldn't happen, with a sentence saying why. */
   rejections: Record<string, { date: string; reason: string }>;
+  /** Cash that can be spent (not set aside for a stock waiting to trade), at each close. */
+  freeCashSeries: number[];
   lastDate: string;
   /** Trades that could not be filled (insufficient cash, no holding). Surfaced in the UI. */
   rejected: string[];
@@ -211,7 +220,10 @@ export type TaxSummary = {
   /** Gains (or losses) from sales so far. */
   realizedShort: number;
   realizedLong: number;
+  /** Tax on sales so far: each tax year's gains and losses netted on their own, then added up. */
   actualTax: number;
+  /** Sales by the year they happened in, oldest first. */
+  byYear: { year: number; realizedShort: number; realizedLong: number; tax: number }[];
 };
 
 export type TimelineEvent = {

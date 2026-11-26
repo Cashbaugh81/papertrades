@@ -147,8 +147,21 @@ function rowToPortfolio(p, set, txs) {
     startDate: p.start_date,
     initial: Number(set.initial),
     weekly: Number(set.weekly),
+    ...toQuotes(p.start_quotes) ? { startQuotes: toQuotes(p.start_quotes) } : {},
     tx: txs.filter((t) => t.portfolio_id === p.id).sort((a, b) => a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0).map(rowToTx)
   };
+}
+function toQuotes(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return void 0;
+  const out = {};
+  for (const [t, q] of Object.entries(v)) {
+    const o = q;
+    const price = Number(o?.price);
+    const ratio = Number(o?.ratio);
+    if (!(price > 0) || typeof o?.at !== "string") continue;
+    out[t] = { price, at: o.at, ...ratio > 0 ? { ratio } : {} };
+  }
+  return Object.keys(out).length ? out : void 0;
 }
 function tickersFor(p) {
   const s = /* @__PURE__ */ new Set([CALENDAR_TICKER]);
@@ -171,6 +184,12 @@ function seriesToBundle(rows, source = "supabase") {
 }
 
 // src/lib/ledger.ts
+function entryPrice(index, book, t, day) {
+  const close = index.close(t, day);
+  const q = book.quotes?.[t];
+  if (!q || close === void 0 || !(close > 0) || nyDate(Date.parse(q.at)) !== day) return { px: close, live: false };
+  return { px: close * (q.ratio ?? q.price / close), live: true };
+}
 function addLot(book, ticker, day, units, cost) {
   if (!(units > 0)) return;
   const list = book.lots.get(ticker) ?? [];
@@ -279,51 +298,107 @@ function applyRebalance(index, book, tx, day) {
   const weights = tx.weights ?? {};
   const invested = Object.values(weights).reduce((a, w) => a + w, 0);
   book.cash = invested < 1 - 1e-9 ? total * (1 - invested) : 0;
+  const live = [];
   for (const [t, w] of Object.entries(weights)) {
-    const px = index.close(t, day);
+    const { px, live: atLive } = entryPrice(index, book, t, day);
     if (px !== void 0 && px > 0) {
       book.units.set(t, total * w / px);
       addLot(book, t, day, total * w / px, total * w);
+      if (atLive) live.push(t);
     } else book.waiting.set(t, total * w);
   }
   book.weights = weights;
   const waited = [...book.waiting.keys()].sort();
-  return { date: day, price: 0, units: 0, amount: total, ...waited.length ? { waited } : {} };
+  return {
+    date: day,
+    price: 0,
+    units: 0,
+    amount: total,
+    ...waited.length ? { waited } : {},
+    ...live.length ? { live: live.sort() } : {}
+  };
 }
 function applyOrder(book, tx, day, px) {
+  const t = tx.ticker;
+  const when = humanDate(day);
   if (tx.kind === "buy") {
     const spend = tx.units && !tx.placedAt ? tx.units * px : tx.amount ?? (tx.units ?? 0) * px;
     if (!(spend > 0)) {
-      book.rejected.push(`buy ${tx.ticker} on ${day}: no amount`);
+      book.rejected.push(`The ${when} purchase of ${t} has no amount.`);
       return void 0;
     }
     if (spend > book.cash + 1e-6) {
       book.rejected.push(
-        `buy ${tx.ticker} on ${day}: needs $${spend.toFixed(2)}, cash $${book.cash.toFixed(2)}`
+        `The ${when} purchase of ${t} needs ${money(spend, 2)}, but only ${money(Math.max(0, book.cash), 2)} is in cash then.`
       );
       return void 0;
     }
     const units2 = spend / px;
     book.cash -= spend;
-    book.units.set(tx.ticker, (book.units.get(tx.ticker) ?? 0) + units2);
-    addLot(book, tx.ticker, day, units2, spend);
+    book.units.set(t, (book.units.get(t) ?? 0) + units2);
+    addLot(book, t, day, units2, spend);
+    book.traded = true;
     return { date: day, price: px, units: units2, amount: spend };
   }
-  const held = book.units.get(tx.ticker) ?? 0;
-  const want = tx.placedAt ? tx.amount !== void 0 ? tx.amount / px : tx.units ?? 0 : tx.units ?? (tx.amount ? tx.amount / px : 0);
-  const units = Math.min(want, held);
-  if (!(units > 0)) {
-    book.rejected.push(`sell ${tx.ticker} on ${day}: nothing held`);
+  const held = book.units.get(t) ?? 0;
+  if (!(held > 1e-9)) {
+    book.rejected.push(
+      book.waiting.has(t) ? `${t} hasn't started trading by ${when}, so there's none to sell yet (its money is set aside).` : `There's no ${t} to sell on ${when}.`
+    );
     return void 0;
   }
+  let units;
+  if (tx.fraction !== void 0) {
+    if (!(tx.fraction > 0 && tx.fraction <= 1 + 1e-9)) {
+      book.rejected.push(`The ${when} sale of ${t} has to be between 0% and 100% of the holding.`);
+      return void 0;
+    }
+    units = tx.fraction >= 1 - 1e-9 ? held : held * tx.fraction;
+  } else {
+    const want = tx.placedAt ? tx.amount !== void 0 ? tx.amount / px : tx.units ?? 0 : tx.units ?? (tx.amount ? tx.amount / px : 0);
+    if (!(want > 0)) {
+      book.rejected.push(`The ${when} sale of ${t} has no amount.`);
+      return void 0;
+    }
+    if (want > held * (1 + 1e-9) + 1e-9) {
+      book.rejected.push(
+        `The ${when} sale of ${t} is for ${money(want * px, 2)}, but only ${money(held * px, 2)} of it is held then.`
+      );
+      return void 0;
+    }
+    units = Math.min(want, held);
+  }
   book.cash += units * px;
-  sellLots(book, tx.ticker, units, px, day);
+  sellLots(book, t, units, px, day);
   const left = held - units;
-  book.units.set(tx.ticker, left < 1e-9 ? 0 : left);
+  book.units.set(t, left < 1e-9 ? 0 : left);
+  book.traded = true;
   return { date: day, price: px, units, amount: units * px };
 }
 function deployContribution(index, book, day, amount, weights) {
-  if (!weights || amount <= 0) return;
+  if (amount <= 0) return;
+  if (book.traded) {
+    const cashBefore = Math.max(0, book.cash - amount);
+    const values = [];
+    let total = cashBefore;
+    for (const [ticker, units] of book.units) {
+      if (units <= 1e-9) continue;
+      const px = closeOn(index, ticker, day);
+      if (!px) continue;
+      values.push([ticker, units * px, px]);
+      total += units * px;
+    }
+    if (!(total > 0)) return;
+    for (const [ticker, v, px] of values) {
+      const spend = amount * v / total;
+      if (!(spend > 0) || spend > book.cash + 1e-6) continue;
+      book.cash -= spend;
+      book.units.set(ticker, (book.units.get(ticker) ?? 0) + spend / px);
+      addLot(book, ticker, day, spend / px, spend);
+    }
+    return;
+  }
+  if (!weights) return;
   for (const [ticker, w] of Object.entries(weights)) {
     if (!(w > 0)) continue;
     const px = closeOn(index, ticker, day);
@@ -338,8 +413,9 @@ function deployContribution(index, book, day, amount, weights) {
     addLot(book, ticker, day, spend / px, spend);
   }
 }
+var KIND_RANK = { deposit: 0, rebalance: 1, sell: 2, buy: 3 };
 function eventKey(tx) {
-  return `${tx.kind === "deposit" ? 0 : 1}|${tx.placedAt ?? tx.date}`;
+  return `${KIND_RANK[tx.kind] ?? 4}|${tx.placedAt ?? tx.date}`;
 }
 function computeState(index, p, endDate) {
   const start = p.startDate;
@@ -351,10 +427,13 @@ function computeState(index, p, endDate) {
     weights: p.weights,
     waiting: /* @__PURE__ */ new Map(),
     lots: /* @__PURE__ */ new Map(),
-    realized: []
+    realized: [],
+    quotes: p.startQuotes,
+    traded: false
   };
   const byTicker = {};
   const cashSeries = [];
+  const freeCashSeries = [];
   const boughtIn = {};
   const fills = {};
   const rejections = {};
@@ -371,6 +450,23 @@ function computeState(index, p, endDate) {
       if (day === void 0) lateDeposits.push(tx);
       else (byDay.get(day) ?? byDay.set(day, []).get(day)).push(tx);
       continue;
+    }
+    if ((tx.kind === "buy" || tx.kind === "sell") && !tx.placedAt && tx.ticker) {
+      const what = `The ${humanDate(tx.date)} ${tx.kind === "buy" ? "purchase" : "sale"} of ${tx.ticker}`;
+      let reason;
+      if (tx.date < start) reason = `${what} is before this portfolio started (${humanDate(start)}).`;
+      else {
+        const i = lowerBound(dates, tx.date);
+        if (i >= 0 && !listedBy(index, tx.ticker, dates[i])) {
+          const first = index.calendar.find((d) => d > dates[i] && index.close(tx.ticker, d) !== void 0);
+          reason = `${tx.ticker} hadn't started trading on ${humanDate(dates[i])}${first ? ` (it first traded on ${humanDate(first)})` : ""}.`;
+        }
+      }
+      if (reason) {
+        book.rejected.push(reason);
+        rejections[tx.id] = { date: tx.date, reason };
+        continue;
+      }
     }
     const f = fillFor(index, tx, dates);
     if (!f) {
@@ -450,6 +546,7 @@ function computeState(index, p, endDate) {
     }
     values.push(holdingsValue + book.cash + waitingTotal(book));
     cashSeries.push(book.cash + waitingTotal(book));
+    freeCashSeries.push(book.cash);
     for (const [ticker, units] of book.units) {
       if (units <= 1e-9 && !byTicker[ticker]) continue;
       const arr = byTicker[ticker] ??= new Array(i).fill(0);
@@ -539,6 +636,7 @@ function computeState(index, p, endDate) {
     thesis: p.thesis,
     dates,
     values,
+    investedSeries: flows.reduce((a, f) => (a.push((a[a.length - 1] ?? 0) + f), a), []),
     cash: book.cash,
     availableCash: Math.max(0, book.cash - reserved),
     invested,
@@ -564,11 +662,30 @@ function computeState(index, p, endDate) {
     maxDrawdownDates: drawdownDates(twrIndex, dates),
     byTicker,
     cashSeries,
+    freeCashSeries,
     lots: [...book.lots.values()].flat().map((l) => ({ ...l })),
     realized: book.realized,
     taxes: taxSummary(index, [...book.lots.values()].flat(), book.realized, finalDay),
     events: timeline(p, fills, boughtIn)
   };
+}
+function humanDate(d) {
+  if (!d) return "\u2014";
+  const dt = /* @__PURE__ */ new Date(d + "T00:00:00Z");
+  return dt.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC"
+  });
+}
+function money(n, decimals = 0) {
+  const sign = n < 0 ? "-" : "";
+  const v = Math.abs(n).toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  });
+  return `${sign}$${v}`;
 }
 function drawdownDates(twr, dates) {
   if (!twr.length) return void 0;
@@ -614,17 +731,25 @@ function taxSummary(index, lots, realized, day) {
   }
   let realizedShort = 0;
   let realizedLong = 0;
+  const years = /* @__PURE__ */ new Map();
   for (const r of realized) {
     if (r.longTerm) realizedLong += r.gain;
     else realizedShort += r.gain;
+    const year = Number(r.sold.slice(0, 4));
+    const y = years.get(year) ?? years.set(year, { year, realizedShort: 0, realizedLong: 0, tax: 0 }).get(year);
+    if (r.longTerm) y.realizedLong += r.gain;
+    else y.realizedShort += r.gain;
   }
+  const byYear = [...years.values()].sort((a, b) => a.year - b.year);
+  for (const y of byYear) y.tax = taxOn(y.realizedShort, y.realizedLong);
   return {
     unrealizedShort,
     unrealizedLong,
     potentialTax: taxOn(unrealizedShort, unrealizedLong),
     realizedShort,
     realizedLong,
-    actualTax: taxOn(realizedShort, realizedLong)
+    actualTax: byYear.reduce((a, y) => a + y.tax, 0),
+    byYear
   };
 }
 function timeline(p, fills, boughtIn) {
@@ -634,7 +759,11 @@ function timeline(p, fills, boughtIn) {
     const f = fills[tx.id];
     if (!f) continue;
     if (tx.kind === "rebalance") {
-      out.push({ date: f.date, kind: first ? "start" : "mix", weights: tx.weights, amount: f.amount });
+      const live = f.live?.length ? {
+        prices: Object.fromEntries(f.live.map((t) => [t, p.startQuotes[t].price])),
+        at: f.live.map((t) => p.startQuotes[t].at).sort()[0]
+      } : void 0;
+      out.push({ date: f.date, kind: first ? "start" : "mix", weights: tx.weights, amount: f.amount, ...live ? { live } : {} });
       if (f.waited?.length) out.push({ date: f.date, kind: "waiting", tickers: f.waited });
       first = false;
     } else if (tx.kind === "buy" || tx.kind === "sell") {

@@ -95,7 +95,7 @@ describe("settle", () => {
     const [s] = settle(index, p, new Set([t.id]));
     expect(s.status).toBe("rejected");
     expect(s.filled_on).toBe("2026-11-09");
-    expect(s.status === "rejected" && s.reject_reason).toMatch(/needs \$5000\.00/);
+    expect(s.status === "rejected" && s.reject_reason).toMatch(/needs \$5,000\.00/);
   });
 
   it("counts earlier fills and deposits when funding a later order", () => {
