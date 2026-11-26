@@ -135,6 +135,7 @@ function rowToTx(r) {
     ticker: r.ticker ?? void 0,
     amount: num(r.amount),
     units: num(r.units),
+    ...num(r.fraction) !== void 0 ? { fraction: num(r.fraction) } : {},
     note: r.note ?? void 0,
     weights: r.kind === "rebalance" ? toWeights(r.weights) : void 0
   };
@@ -369,11 +370,14 @@ function applyOrder(book, tx, day, px) {
     units = Math.min(want, held);
   }
   book.cash += units * px;
+  const from = book.realized.length;
   sellLots(book, t, units, px, day);
+  const gain = { shortTerm: 0, longTerm: 0 };
+  for (const r of book.realized.slice(from)) gain[r.longTerm ? "longTerm" : "shortTerm"] += r.gain;
   const left = held - units;
   book.units.set(t, left < 1e-9 ? 0 : left);
   book.traded = true;
-  return { date: day, price: px, units, amount: units * px };
+  return { date: day, price: px, units, amount: units * px, gain };
 }
 function deployContribution(index, book, day, amount, weights) {
   if (amount <= 0) return;
@@ -767,7 +771,17 @@ function timeline(p, fills, boughtIn) {
       if (f.waited?.length) out.push({ date: f.date, kind: "waiting", tickers: f.waited });
       first = false;
     } else if (tx.kind === "buy" || tx.kind === "sell") {
-      out.push({ date: f.date, kind: tx.kind, tickers: [tx.ticker], amount: f.amount });
+      out.push({
+        date: f.date,
+        kind: tx.kind,
+        tickers: [tx.ticker],
+        amount: f.amount,
+        txId: tx.id,
+        price: f.price,
+        units: f.units,
+        ...tx.fraction !== void 0 ? { fraction: tx.fraction } : {},
+        ...f.gain ? { gain: f.gain } : {}
+      });
     }
   }
   for (const [t, day] of Object.entries(boughtIn)) out.push({ date: day, kind: "bought_in", tickers: [t] });
@@ -805,6 +819,34 @@ function settle(index, p, pendingIds) {
 function round(x, dp) {
   const k = 10 ** dp;
   return Math.round(x * k) / k;
+}
+
+// src/lib/trades.ts
+function problems(state) {
+  return Object.entries(state.rejections).map(([txId, r]) => ({ txId, date: r.date, reason: r.reason })).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+}
+function checkTrade(index, p, tx, end) {
+  const before = new Set(Object.keys(computeState(index, p, end).rejections));
+  const state = computeState(index, { ...p, tx: [...p.tx, tx] }, end);
+  const all = problems(state);
+  const own = all.find((x) => x.txId === tx.id)?.reason;
+  const others = all.filter((x) => x.txId !== tx.id && !before.has(x.txId));
+  return { ok: !own && !others.length, own, others, fill: state.fills[tx.id], state };
+}
+function checkDelete(index, p, txId, end) {
+  const before = new Set(Object.keys(computeState(index, p, end).rejections));
+  const state = computeState(index, { ...p, tx: p.tx.filter((t) => t.id !== txId) }, end);
+  const others = problems(state).filter((x) => !before.has(x.txId));
+  return { ok: !others.length, others, state };
+}
+function tickersHeldAtOnce(state) {
+  let most = 0;
+  for (let i = 0; i < state.dates.length; i++) {
+    let n = 0;
+    for (const v of Object.values(state.byTicker)) if ((v[i] ?? 0) > 0.5) n++;
+    most = Math.max(most, n);
+  }
+  return most + Object.keys(state.waiting).length;
 }
 
 // src/server/tiingo.ts
@@ -859,6 +901,9 @@ export {
   CALENDAR_TICKER,
   HISTORY_START,
   buildIndex,
+  checkDelete,
+  checkTrade,
+  computeState,
   incrementalStart,
   isFresh,
   lastCutoff,
@@ -870,5 +915,6 @@ export {
   rowToPortfolio,
   seriesToBundle,
   settle,
-  tickersFor
+  tickersFor,
+  tickersHeldAtOnce
 };

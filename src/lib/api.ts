@@ -393,3 +393,34 @@ export async function pricesOn(tickers: string[], day: string): Promise<Record<s
   }
   return out;
 }
+
+/** A trade as the server stores it: dollars or a share of the holding (never shares). */
+export type TradeRequest = { kind: "buy" | "sell"; ticker: string; date: string; amount?: number; fraction?: number };
+export type TradeResult = {
+  ok: boolean;
+  id?: string;
+  problem?: string;
+  upgrade?: boolean;
+  others?: { txId: string; date: string; reason: string }[];
+};
+
+async function tradesCall(body: Record<string, unknown>): Promise<TradeResult> {
+  const { data, error } = await supabase.functions.invoke<TradeResult & { error?: string }>("trades", { body });
+  if (error) {
+    // A 4xx carries a JSON body with the reason.
+    const ctx = (error as { context?: Response }).context;
+    const msg = ctx ? ((await ctx.json().catch(() => ({}))) as { error?: string }).error : undefined;
+    return { ok: false, problem: msg ?? "That trade couldn't be saved. Try again." };
+  }
+  return data ?? { ok: false, problem: "No answer from the server." };
+}
+
+/** Buy or sell on a date (checked against the whole history on the server). */
+export function placeTrade(portfolioId: string, trade: TradeRequest): Promise<TradeResult> {
+  return tradesCall({ action: "place", portfolioId, trade });
+}
+
+/** Delete a trade (refused if a later trade relies on it). */
+export function deleteTrade(txId: string): Promise<TradeResult> {
+  return tradesCall({ action: "delete", txId });
+}
