@@ -54,6 +54,8 @@ type Book = {
   realized: RealizedGain[];
   /** Live purchase prices taken when a live portfolio was created (see Portfolio.startQuotes). */
   quotes?: Record<string, StartQuote>;
+  /** True once a buy or sell has filled: from then on, deposits follow what's held (see deployContribution). */
+  traded: boolean;
 };
 
 /**
@@ -246,47 +248,76 @@ function applyOrder(
   day: string,
   px: number,
 ): Fill | undefined {
+  const t = tx.ticker!;
+  const when = humanDate(day);
   if (tx.kind === "buy") {
     // An order is sized either in units or in dollars. Dollars are the honest
     // default for a beginner: you decide how much of your cash to commit, and
     // the share count is whatever that buys at the close.
     const spend = tx.units && !tx.placedAt ? tx.units * px : (tx.amount ?? (tx.units ?? 0) * px);
     if (!(spend > 0)) {
-      book.rejected.push(`buy ${tx.ticker} on ${day}: no amount`);
+      book.rejected.push(`The ${when} purchase of ${t} has no amount.`);
       return undefined;
     }
     if (spend > book.cash + 1e-6) {
       // A buy the account cannot fund is rejected, not clamped: silently
       // allowing negative cash would make a portfolio look better than possible.
       book.rejected.push(
-        `buy ${tx.ticker} on ${day}: needs $${spend.toFixed(2)}, cash $${book.cash.toFixed(2)}`,
+        `The ${when} purchase of ${t} needs ${money(spend, 2)}, but only ${money(Math.max(0, book.cash), 2)} is in cash then.`,
       );
       return undefined;
     }
     const units = spend / px;
     book.cash -= spend;
-    book.units.set(tx.ticker!, (book.units.get(tx.ticker!) ?? 0) + units);
-    addLot(book, tx.ticker!, day, units, spend);
+    book.units.set(t, (book.units.get(t) ?? 0) + units);
+    addLot(book, t, day, units, spend);
+    book.traded = true;
     return { date: day, price: px, units, amount: spend };
   }
-  // Sell. A dollar-sized order sells that value at the fill price; legacy
-  // unit-sized rows sell units. Either way, never more than is held.
-  const held = book.units.get(tx.ticker!) ?? 0;
-  const want = tx.placedAt
-    ? tx.amount !== undefined
-      ? tx.amount / px
-      : (tx.units ?? 0)
-    : (tx.units ?? (tx.amount ? tx.amount / px : 0));
-  const units = Math.min(want, held);
-  if (!(units > 0)) {
-    book.rejected.push(`sell ${tx.ticker} on ${day}: nothing held`);
+  // Sell: a share of the holding (fraction; 1 = all of it), or a dollar amount
+  // at the fill price (legacy rows: units). Never more than is held: an order
+  // that asks for more is refused rather than quietly made smaller.
+  const held = book.units.get(t) ?? 0;
+  if (!(held > 1e-9)) {
+    book.rejected.push(
+      book.waiting.has(t)
+        ? `${t} hasn't started trading by ${when}, so there's none to sell yet (its money is set aside).`
+        : `There's no ${t} to sell on ${when}.`,
+    );
     return undefined;
   }
+  let units: number;
+  if (tx.fraction !== undefined) {
+    if (!(tx.fraction > 0 && tx.fraction <= 1 + 1e-9)) {
+      book.rejected.push(`The ${when} sale of ${t} has to be between 0% and 100% of the holding.`);
+      return undefined;
+    }
+    // "All" sells exactly what's held, so nothing is left behind.
+    units = tx.fraction >= 1 - 1e-9 ? held : held * tx.fraction;
+  } else {
+    const want = tx.placedAt
+      ? tx.amount !== undefined
+        ? tx.amount / px
+        : (tx.units ?? 0)
+      : (tx.units ?? (tx.amount ? tx.amount / px : 0));
+    if (!(want > 0)) {
+      book.rejected.push(`The ${when} sale of ${t} has no amount.`);
+      return undefined;
+    }
+    if (want > held * (1 + 1e-9) + 1e-9) {
+      book.rejected.push(
+        `The ${when} sale of ${t} is for ${money(want * px, 2)}, but only ${money(held * px, 2)} of it is held then.`,
+      );
+      return undefined;
+    }
+    units = Math.min(want, held);
+  }
   book.cash += units * px;
-  sellLots(book, tx.ticker!, units, px, day);
+  sellLots(book, t, units, px, day);
   const left = held - units;
   // Snap dust from floating-point division to zero so "sell everything" does.
-  book.units.set(tx.ticker!, left < 1e-9 ? 0 : left);
+  book.units.set(t, left < 1e-9 ? 0 : left);
+  book.traded = true;
   return { date: day, price: px, units, amount: units * px };
 }
 
@@ -307,7 +338,33 @@ function deployContribution(
   amount: number,
   weights: Record<string, number> | undefined,
 ): void {
-  if (!weights || amount <= 0) return;
+  if (amount <= 0) return;
+  if (book.traded) {
+    // After the first trade, a deposit follows what the portfolio holds that day,
+    // by value, with cash counting as a holding: a portfolio that's 30% cash
+    // keeps 30% of the deposit in cash; one that sold everything keeps it all.
+    // Money set aside for a stock not trading yet doesn't count.
+    const cashBefore = Math.max(0, book.cash - amount);
+    const values: [string, number, number][] = [];
+    let total = cashBefore;
+    for (const [ticker, units] of book.units) {
+      if (units <= 1e-9) continue;
+      const px = closeOn(index, ticker, day);
+      if (!px) continue;
+      values.push([ticker, units * px, px]);
+      total += units * px;
+    }
+    if (!(total > 0)) return;
+    for (const [ticker, v, px] of values) {
+      const spend = (amount * v) / total;
+      if (!(spend > 0) || spend > book.cash + 1e-6) continue;
+      book.cash -= spend;
+      book.units.set(ticker, (book.units.get(ticker) ?? 0) + spend / px);
+      addLot(book, ticker, day, spend / px, spend);
+    }
+    return;
+  }
+  if (!weights) return;
   for (const [ticker, w] of Object.entries(weights)) {
     if (!(w > 0)) continue;
     const px = closeOn(index, ticker, day);
@@ -324,9 +381,13 @@ function deployContribution(
   }
 }
 
-/** Sort key for same-day events: deposits first, then orders in placement order. */
+/**
+ * Sort key for same-day events: deposits, then mix changes, then sells, then
+ * buys (so a sale can pay for a purchase the same day), each in the order placed.
+ */
+const KIND_RANK: Record<string, number> = { deposit: 0, rebalance: 1, sell: 2, buy: 3 };
 function eventKey(tx: Tx): string {
-  return `${tx.kind === "deposit" ? 0 : 1}|${tx.placedAt ?? tx.date}`;
+  return `${KIND_RANK[tx.kind] ?? 4}|${tx.placedAt ?? tx.date}`;
 }
 
 export function computeState(
@@ -346,10 +407,12 @@ export function computeState(
     lots: new Map(),
     realized: [],
     quotes: p.startQuotes,
+    traded: false,
   };
   /** Each holding's value and the cash (incl. cash set aside) at each close. */
   const byTicker: Record<string, number[]> = {};
   const cashSeries: number[] = [];
+  const freeCashSeries: number[] = [];
   /** When each set-aside stock bought in: ticker → its first trading day. */
   const boughtIn: Record<string, string> = {};
   const fills: Record<string, Fill> = {};
@@ -371,6 +434,25 @@ export function computeState(
       if (day === undefined) lateDeposits.push(tx);
       else (byDay.get(day) ?? byDay.set(day, []).get(day)!).push(tx);
       continue;
+    }
+    if ((tx.kind === "buy" || tx.kind === "sell") && !tx.placedAt && tx.ticker) {
+      // A trade on a date: not before the portfolio started, and not before the
+      // stock first traded.
+      const what = `The ${humanDate(tx.date)} ${tx.kind === "buy" ? "purchase" : "sale"} of ${tx.ticker}`;
+      let reason: string | undefined;
+      if (tx.date < start) reason = `${what} is before this portfolio started (${humanDate(start)}).`;
+      else {
+        const i = lowerBound(dates, tx.date);
+        if (i >= 0 && !listedBy(index, tx.ticker, dates[i])) {
+          const first = index.calendar.find((d) => d > dates[i] && index.close(tx.ticker!, d) !== undefined);
+          reason = `${tx.ticker} hadn't started trading on ${humanDate(dates[i])}${first ? ` (it first traded on ${humanDate(first)})` : ""}.`;
+        }
+      }
+      if (reason) {
+        book.rejected.push(reason);
+        rejections[tx.id] = { date: tx.date, reason };
+        continue;
+      }
     }
     const f = fillFor(index, tx, dates);
     if (!f) {
@@ -468,6 +550,7 @@ export function computeState(
     }
     values.push(holdingsValue + book.cash + waitingTotal(book));
     cashSeries.push(book.cash + waitingTotal(book));
+    freeCashSeries.push(book.cash);
     for (const [ticker, units] of book.units) {
       if (units <= 1e-9 && !byTicker[ticker]) continue;
       const arr = (byTicker[ticker] ??= new Array(i).fill(0));
@@ -609,6 +692,7 @@ export function computeState(
     maxDrawdownDates: drawdownDates(twrIndex, dates),
     byTicker,
     cashSeries,
+    freeCashSeries,
     lots: [...book.lots.values()].flat().map((l) => ({ ...l })),
     realized: book.realized,
     taxes: taxSummary(index, [...book.lots.values()].flat(), book.realized, finalDay),
@@ -754,17 +838,27 @@ function taxSummary(index: PriceIndex, lots: Lot[], realized: RealizedGain[], da
   }
   let realizedShort = 0;
   let realizedLong = 0;
+  const years = new Map<number, { year: number; realizedShort: number; realizedLong: number; tax: number }>();
   for (const r of realized) {
     if (r.longTerm) realizedLong += r.gain;
     else realizedShort += r.gain;
+    const year = Number(r.sold.slice(0, 4));
+    const y = years.get(year) ?? years.set(year, { year, realizedShort: 0, realizedLong: 0, tax: 0 }).get(year)!;
+    if (r.longTerm) y.realizedLong += r.gain;
+    else y.realizedShort += r.gain;
   }
+  // Tax is owed year by year: gains and losses net within a year. (Carrying a
+  // net loss into later years isn't modelled.)
+  const byYear = [...years.values()].sort((a, b) => a.year - b.year);
+  for (const y of byYear) y.tax = taxOn(y.realizedShort, y.realizedLong);
   return {
     unrealizedShort,
     unrealizedLong,
     potentialTax: taxOn(unrealizedShort, unrealizedLong),
     realizedShort,
     realizedLong,
-    actualTax: taxOn(realizedShort, realizedLong),
+    actualTax: byYear.reduce((a, y) => a + y.tax, 0),
+    byYear,
   };
 }
 

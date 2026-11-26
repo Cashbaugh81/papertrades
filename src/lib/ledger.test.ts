@@ -131,14 +131,15 @@ describe("order fills", () => {
     expect(s.availableCash).toBe(6_000);
   });
 
-  it("a dollar sell fills at the sell-day close and is capped at what is held", () => {
+  it("a dollar sell for more than is held is refused, not shrunk", () => {
     const s = computeState(
       index,
       pf({ tx: [order("buy", d[0], 10, 5_000), order("sell", d[150], 10, 99_999)] }),
       last,
     );
-    expect(s.holdings).toHaveLength(0);
-    expect(s.cash).toBeCloseTo(10_500, 6); // 50 units * 110 + 5000 cash
+    expect(s.holdings).toHaveLength(1); // still holds the 50 units
+    expect(s.cash).toBeCloseTo(5_000, 6);
+    expect(Object.values(s.rejections)[0].reason).toMatch(/is for \$99,999\.00, but only \$5,500\.00 of it is held then/);
   });
 });
 
@@ -167,8 +168,10 @@ describe("ledger invariants (ported from checks/ledger.check.ts)", () => {
       pf({ tx: [legacyBuy, { id: "t4", kind: "sell", date: dates[120], ticker: "AAA", units: 500 }] }),
       last,
     );
-    expect(s.holdings).toHaveLength(0);
-    expect(s.cash).toBeCloseTo(10_500);
+    // Asking for 500 units with 50 held is refused rather than selling the 50.
+    expect(s.holdings).toHaveLength(1);
+    expect(s.cash).toBeCloseTo(5_000); // the cash the $5,000 buy didn't use
+    expect(Object.keys(s.rejections)).toEqual(["t4"]);
   });
 
   it("counts contributions as invested, not as return", () => {
@@ -179,7 +182,8 @@ describe("ledger invariants (ported from checks/ledger.check.ts)", () => {
     );
     expect(s.invested).toBeGreaterThan(10_000);
     expect(s.returnOnInvested).toBeCloseTo(0, 4);
-    expect(s.cash).toBeGreaterThan(9_000); // unweighted: deposits stay in cash
+    // After a trade, deposits follow what's held (all BBB here), so none sit in cash.
+    expect(s.cash).toBeCloseTo(0, 6);
   });
 
   it("a later start does not claim the earlier window", () => {
@@ -254,11 +258,8 @@ describe("review regression on bundled data", () => {
       pf({
         startDate: start,
         monthly: 500,
-        weights: { VTI: 0.6, BND: 0.4 },
-        tx: [
-          { id: "a", kind: "buy", date: start, ticker: "VTI", amount: 6_000 },
-          { id: "b", kind: "buy", date: start, ticker: "BND", amount: 4_000 },
-        ],
+        // The starting mix (as every portfolio is set up now); deposits follow it.
+        tx: [{ id: "a", kind: "rebalance", date: start, weights: { VTI: 0.6, BND: 0.4 } }],
       }),
       real.lastDate,
     );
