@@ -9,7 +9,8 @@ import { windowState } from "@/lib/ranges";
 import Stat from "@/components/Stat";
 import { gainOn, humanDate, mixLabel, money, pct, signedPct, TAX_RATES } from "@/lib/ledger";
 import { GainBadge } from "@/components/PathChart";
-import type { Portfolio, PortfolioState, TimelineEvent } from "@/lib/types";
+import { nyDate } from "@/lib/market";
+import type { PendingOrder, Portfolio, PortfolioState, TimelineEvent } from "@/lib/types";
 
 /** Buying and selling inside an opened portfolio (Premium; never portfolio 1). */
 export type Trading = {
@@ -247,6 +248,26 @@ function liveText(e: TimelineEvent): string {
   return ` ${list.join(", ")}: live price${list.length > 1 ? "s" : ""} at ${nyTime(e.live.at)} ET${all ? "" : "; the rest at the close"}.`;
 }
 
+/** " Live price at 11:42 AM ET." for a buy or sell placed while the market was open. */
+function liveAt(e: TimelineEvent): string {
+  return e.live ? ` Live price at ${nyTime(e.live.at)} ET.` : "";
+}
+
+/** "Sell 50% of NVDA at the live price $148.20 (11:42 AM ET)" for an order waiting to fill. */
+function pendingText(o: PendingOrder): string {
+  const what =
+    o.kind === "sell"
+      ? o.fraction !== undefined
+        ? o.fraction >= 1 - 1e-9
+          ? `Sell all of ${o.ticker}`
+          : `Sell ${Math.round(o.fraction * 1000) / 10}% of ${o.ticker}`
+        : `Sell ${money(o.amount, 2)} of ${o.ticker}`
+      : `Buy ${money(o.amount, 2)} of ${o.ticker}`;
+  if (!o.quote) return `${what} at the next close.`;
+  const day = nyDate(Date.parse(o.quote.at));
+  return `${what} at the live price, ${money(o.quote.price, 2)} (${nyTime(o.quote.at)} ET${day === nyDate() ? "" : `, ${humanDate(day)}`}). It shows in the portfolio once ${day === nyDate() ? "today's" : "that day's"} close is in.`;
+}
+
 function eventText(e: TimelineEvent): string {
   const names = (e.tickers ?? []).join(", ");
   switch (e.kind) {
@@ -260,7 +281,7 @@ function eventText(e: TimelineEvent): string {
       return `${names} started trading, and the cash set aside for it was invested at that day's close.`;
     case "buy":
       return e.units && e.price
-        ? `Bought ${shareText(e.units)} shares of ${names} at ${money(e.price, 2)} for ${money(e.amount ?? 0, 2)}.`
+        ? `Bought ${shareText(e.units)} shares of ${names} at ${money(e.price, 2)} for ${money(e.amount ?? 0, 2)}.${liveAt(e)}`
         : `Bought ${money(e.amount ?? 0)} of ${names}.`;
     case "sell": {
       const what =
@@ -279,7 +300,7 @@ function eventText(e: TimelineEvent): string {
             : "short-term";
       return `Sold ${what}${shares} for ${money(e.amount ?? 0, 2)}${
         g === undefined ? "" : `: ${g >= 0 ? "gain" : "loss"} ${money(Math.abs(g), 2)}, ${term}`
-      }. The money went to cash.`;
+      }. The money went to cash.${liveAt(e)}`;
     }
   }
 }
@@ -693,6 +714,7 @@ function TradesList({ state, trading, onBuy }: { state: PortfolioState; trading:
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<{ txId: string; text: string } | null>(null);
   const trades = state.events.filter((e) => (e.kind === "buy" || e.kind === "sell") && e.txId).reverse();
+  const waitingOrders = state.pending.filter((o) => o.kind === "buy" || o.kind === "sell");
   const broken = tradeProblems(state).filter((x) => trading.portfolio.tx.some((t) => t.id === x.txId && (t.kind === "buy" || t.kind === "sell")));
 
   async function remove(txId: string) {
@@ -719,7 +741,7 @@ function TradesList({ state, trading, onBuy }: { state: PortfolioState; trading:
         <h3 id="trades-title" className="text-[14px] font-medium">
           Trades
         </h3>
-        {state.cash > 0.5 && (
+        {(state.cash > 0.5 || waitingOrders.some((o) => o.kind === "sell")) && (
           <button type="button" onClick={onBuy} className="text-[12px] font-medium text-accent underline underline-offset-2">
             Buy with cash
           </button>
@@ -731,10 +753,49 @@ function TradesList({ state, trading, onBuy }: { state: PortfolioState; trading:
           out: {broken.map((b) => b.reason).join(" ")} Delete {broken.length === 1 ? "it" : "them"}, or change the starting mix back.
         </div>
       )}
+      {waitingOrders.length > 0 && (
+        <ol className="m-0 mb-2 list-none space-y-1.5 p-0 text-[13px]" data-testid="pending-trades">
+          {waitingOrders.map((o) => (
+            <li key={o.txId} className="flex flex-wrap items-baseline gap-x-3 gap-y-1" data-testid="pending-row">
+              <span className="w-[92px] shrink-0 text-[12px] font-medium text-accent">Waiting to fill</span>
+              <span className="min-w-0 flex-1">{pendingText(o)}</span>
+              {asking === o.txId ? (
+                <span className="flex gap-2 text-[12px]">
+                  <button type="button" disabled={busy} onClick={() => remove(o.txId)} className="font-medium text-loss underline underline-offset-2" data-testid="pending-cancel-confirm">
+                    {busy ? "Cancelling…" : "Cancel it"}
+                  </button>
+                  <button type="button" onClick={() => setAsking(null)} className="text-muted underline underline-offset-2">
+                    Keep
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProblem(null);
+                    setAsking(o.txId);
+                  }}
+                  className="text-[12px] text-muted underline underline-offset-2 hover:text-ink"
+                  data-testid="pending-cancel"
+                >
+                  Cancel
+                </button>
+              )}
+              {problem?.txId === o.txId && (
+                <span className="basis-full text-[12px] text-loss" role="alert">
+                  {problem?.text}
+                </span>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
       {!trades.length && !broken.length ? (
         <p className="m-0 text-[12px] text-muted">
           {trading.premium
-            ? "No trades yet. Use Trade on a holding to sell some or all of it on any date; the money becomes cash you can buy with."
+            ? waitingOrders.length
+              ? "Nothing has filled yet."
+              : "No trades yet. Use Trade on a holding to sell some or all of it, now or on a past date; the money becomes cash you can buy with."
             : "Selling and buying on any date is part of Premium."}
         </p>
       ) : (

@@ -44,10 +44,14 @@ const nyParts = (t: number) => {
   return { date: `${p.year}-${p.month}-${p.day}`, minutes: Number(p.hour) * 60 + Number(p.minute), weekday: p.weekday };
 };
 
-/** 9:30–16:00 New York, Monday to Friday. Holidays are caught by the quotes' timestamps. */
+/** Sessions that close at 13:00 New York (keep in step with EARLY_CLOSES in src/lib/market.ts). */
+const EARLY_CLOSES = new Set(["2026-11-27", "2026-12-24", "2027-11-26"]);
+
+/** 9:30–16:00 New York (13:00 on a half day), Monday to Friday. Holidays are caught by the quotes' timestamps. */
 export function marketHours(t: number): boolean {
-  const { minutes, weekday } = nyParts(t);
-  return weekday !== "Sat" && weekday !== "Sun" && minutes >= 9 * 60 + 30 && minutes < 16 * 60;
+  const { date, minutes, weekday } = nyParts(t);
+  const close = EARLY_CLOSES.has(date) ? 13 * 60 : 16 * 60;
+  return weekday !== "Sat" && weekday !== "Sun" && minutes >= 9 * 60 + 30 && minutes < close;
 }
 
 /** A quote counts as live if it was updated today, during market hours, within the last 15 minutes. */

@@ -3,20 +3,28 @@ import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import TickerField from "@/components/TickerField";
 import { shareText } from "@/components/MixEditor";
-import type { TickerInfo, TradeRequest, TradeResult } from "@/lib/api";
+import { liveQuotes, type LiveQuote, type TickerInfo, type TradeRequest, type TradeResult } from "@/lib/api";
 import { humanDate, money, TAX_RATES, taxOn } from "@/lib/ledger";
+import { nyDate } from "@/lib/market";
 import type { PriceIndex } from "@/lib/prices";
-import { cashAvailableOn, checkTrade, sharesHeldOn, tradingDayFor } from "@/lib/trades";
+import { cashAvailableOn, checkNowTrade, checkTrade, estimateGain, freeToSpendNow, sharesHeldOn, tradingDayFor } from "@/lib/trades";
 import type { Portfolio, PortfolioState, Tx } from "@/lib/types";
 
 export type { TradeRequest, TradeResult };
 
 type SellSize = "pct" | "usd" | "shares" | "all";
 type BuySize = "usd" | "shares";
+type When = "now" | "date";
+
+/** "11:42 AM ET" */
+function etTime(iso: string): string {
+  return `${new Date(iso).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })} ET`;
+}
 
 /**
- * Sell part or all of a holding, or buy with the cash, on a date at that day's
- * close. The preview replays the whole portfolio with the trade added (the same
+ * Sell part or all of a holding, or buy with the cash: now (at the live price
+ * while the market is open, else at the next close) or on a past date at that
+ * day's close. The preview replays the whole portfolio with the trade added (the same
  * check the server makes), so what it shows is what will happen.
  */
 export default function TradeDialog({
@@ -41,7 +49,10 @@ export default function TradeDialog({
 }) {
   const [kind, setKind] = useState<"buy" | "sell">("sell");
   const [ticker, setTicker] = useState("");
+  const [when, setWhen] = useState<When>("now");
   const [date, setDate] = useState(index.lastDate);
+  /** Live price for a "now" trade: undefined while loading, null when there's none (market closed, or a fund). */
+  const [live, setLive] = useState<LiveQuote | null | undefined>(undefined);
   const [sellSize, setSellSize] = useState<SellSize>("pct");
   const [buySize, setBuySize] = useState<BuySize>("usd");
   const [value, setValue] = useState("");
@@ -55,6 +66,7 @@ export default function TradeDialog({
     if (!open) return;
     setKind(open.kind);
     setTicker(open.kind === "sell" ? open.ticker : "");
+    setWhen("now");
     setDate(index.lastDate);
     setSellSize("pct");
     setBuySize("usd");
@@ -76,47 +88,82 @@ export default function TradeDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const day = tradingDayFor(state, date) ?? index.lastDate;
-  const price = ticker ? index.close(ticker, day) : undefined;
-  const held = ticker && kind === "sell" ? sharesHeldOn(index, state, ticker, date) : 0;
-  const cash = cashAvailableOn(state, date);
+  // A "now" trade shows the live price, refreshed each minute while open.
+  useEffect(() => {
+    if (!open || when !== "now" || !ticker) return;
+    let gone = false;
+    const get = () =>
+      liveQuotes([ticker])
+        .then((q) => !gone && setLive(q[ticker] ?? null))
+        .catch(() => !gone && setLive(null));
+    setLive(undefined);
+    get();
+    const timer = window.setInterval(get, 60_000);
+    return () => {
+      gone = true;
+      window.clearInterval(timer);
+    };
+  }, [open, when, ticker]);
+
+  const now = when === "now";
+  const today = nyDate();
+  const lastClose = (t: string) => index.close(t, index.lastDate);
+  const day = now ? today : (tradingDayFor(state, date) ?? index.lastDate);
+  const price = !ticker ? undefined : now ? (live?.price ?? lastClose(ticker)) : index.close(ticker, day);
+  const held = ticker && kind === "sell" ? (now ? (state.holdings.find((h) => h.ticker === ticker)?.units ?? 0) : sharesHeldOn(index, state, ticker, date)) : 0;
+  const cash = now ? freeToSpendNow(state, lastClose) : cashAvailableOn(state, date);
   const n = Number(value);
 
   /** The trade as typed, ready to check and send; or why it isn't ready. */
   const request = useMemo((): { req?: TradeRequest; wait?: string } => {
     if (!ticker) return { wait: "Pick a stock or fund to buy." };
-    if (!date || date < portfolio.startDate || date > index.lastDate) {
+    const at = now ? ({ now: true } as const) : { date };
+    if (now && live === undefined) return { wait: `Getting ${ticker}'s price…` };
+    if (!now && (!date || date < portfolio.startDate || date > index.lastDate)) {
       return { wait: `Pick a date from ${humanDate(portfolio.startDate)} to ${humanDate(index.lastDate)}.` };
     }
     if (kind === "sell") {
-      if (sellSize === "all") return { req: { kind, ticker, date, fraction: 1 } };
+      if (sellSize === "all") return { req: { kind, ticker, ...at, fraction: 1 } };
       if (!(n > 0)) return { wait: "Enter how much to sell." };
       if (sellSize === "pct") {
         if (n > 100) return { wait: "That's more than 100% of the holding." };
-        return { req: { kind, ticker, date, fraction: n >= 100 ? 1 : n / 100 } };
+        return { req: { kind, ticker, ...at, fraction: n >= 100 ? 1 : n / 100 } };
       }
       if (!price) return { wait: `No ${ticker} price on ${humanDate(day)}.` };
       const shares = sellSize === "shares" ? n : n / price;
       // Asking for every share held sells all of it (no leftover sliver).
-      if (held > 0 && shares >= held * (1 - 1e-9) && shares <= held * (1 + 1e-6)) return { req: { kind, ticker, date, fraction: 1 } };
-      return { req: { kind, ticker, date, amount: Math.round((sellSize === "usd" ? n : n * price) * 100) / 100 } };
+      if (held > 0 && shares >= held * (1 - 1e-9) && shares <= held * (1 + 1e-6)) return { req: { kind, ticker, ...at, fraction: 1 } };
+      return { req: { kind, ticker, ...at, amount: Math.round((sellSize === "usd" ? n : n * price) * 100) / 100 } };
     }
     if (!(n > 0)) return { wait: "Enter how much to buy." };
     if (!price) return { wait: looking ? `Loading ${ticker}'s prices…` : `No ${ticker} price on ${humanDate(day)}.` };
-    return { req: { kind, ticker, date, amount: Math.round((buySize === "usd" ? n : n * price) * 100) / 100 } };
-  }, [ticker, date, kind, sellSize, buySize, n, price, held, day, looking, portfolio.startDate, index.lastDate]);
+    return { req: { kind, ticker, ...at, amount: Math.round((buySize === "usd" ? n : n * price) * 100) / 100 } };
+  }, [ticker, date, now, live, kind, sellSize, buySize, n, price, held, day, looking, portfolio.startDate, index.lastDate]);
 
   /** The same check the server makes, on the same engine. */
   const check = useMemo(() => {
-    if (!request.req) return undefined;
-    const tx: Tx = { id: "preview", ...request.req };
+    if (!request.req || request.req.now) return undefined;
+    const tx: Tx = { id: "preview", ...request.req, date: request.req.date! };
     return checkTrade(index, portfolio, tx, index.lastDate);
   }, [request.req, index, portfolio]);
+
+  /** A "now" trade: the same check the server makes, and an estimate at the live (or latest) price. */
+  const nowCheck = useMemo(() => {
+    const r = request.req;
+    if (!r?.now || !price) return undefined;
+    const own = checkNowTrade(state, r, price, lastClose);
+    const units = r.kind === "sell" ? (r.fraction !== undefined ? held * r.fraction : (r.amount ?? 0) / price) : (r.amount ?? 0) / price;
+    const amount = units * price;
+    const gain = r.kind === "sell" ? estimateGain(state, r.ticker, units, price, today) : undefined;
+    return { ok: !own, own, units, amount, gain, cashAfter: cash + (r.kind === "sell" ? amount : -amount) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request.req, price, state, held, cash, today]);
+  const ok = now ? !!nowCheck?.ok : !!check?.ok;
 
   if (!open) return null;
 
   async function place() {
-    if (!request.req || !check?.ok) return;
+    if (!request.req || !ok) return;
     setBusy(true);
     setServer(null);
     try {
@@ -130,11 +177,13 @@ export default function TradeDialog({
     }
   }
 
-  const f = check?.fill;
-  const gain = f?.gain;
+  const f = now
+    ? nowCheck && { units: nowCheck.units, price: price!, amount: nowCheck.amount, date: today }
+    : check?.fill;
+  const gain = now ? nowCheck?.gain : check?.fill?.gain;
   const tax = gain ? taxOn(gain.shortTerm, gain.longTerm) : 0;
-  const cashAfter = check?.state ? cashAvailableOn(check.state, date) : undefined;
-  const problem = server?.problem ?? check?.own;
+  const cashAfter = now ? nowCheck?.cashAfter : check?.state ? cashAvailableOn(check.state, date) : undefined;
+  const problem = server?.problem ?? (now ? nowCheck?.own : check?.own);
   const others = server?.others?.length ? server.others : check?.others ?? [];
   const chip = (on: boolean) =>
     `rounded-full px-3 py-1 text-[12px] font-medium ${on ? "bg-ink text-surface" : "text-ink hover:bg-ink/5"}`;
@@ -165,8 +214,10 @@ export default function TradeDialog({
           {kind === "sell" ? `Sell ${ticker}` : "Buy with cash"}
         </h2>
         <p className="mt-1 text-[12px] text-muted">
-          At the close on the day you pick{kind === "buy" ? ", from this portfolio's cash" : ""}. The money from a sale stays in
-          cash until you buy something with it.
+          {now
+            ? "Now: at the live price while the market's open, otherwise at the next close."
+            : "At the close on the day you pick."}
+          {kind === "buy" ? " From this portfolio's cash." : ""} The money from a sale stays in cash until you buy something with it.
         </p>
 
         <div className="mt-4 space-y-4">
@@ -192,6 +243,43 @@ export default function TradeDialog({
           )}
 
           <div>
+            <span className={label}>When</span>
+            <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="When">
+              {(
+                [
+                  ["now", "Now"],
+                  ["date", "On a past date"],
+                ] as const
+              ).map(([k, text]) => (
+                <button
+                  key={k}
+                  type="button"
+                  role="radio"
+                  aria-checked={when === k}
+                  className={chip(when === k)}
+                  data-when={k}
+                  onClick={() => {
+                    setWhen(k);
+                    setServer(null);
+                  }}
+                >
+                  {text}
+                </button>
+              ))}
+            </div>
+            {now && ticker && (
+              <div className="mt-1 text-[11px] text-muted" data-testid="trade-now-note">
+                {live === undefined
+                  ? `Getting ${ticker}'s price…`
+                  : live
+                    ? `Live price ${money(live.price, 2)} at ${etTime(live.at)}. The price is taken again when you confirm.`
+                    : `The market's closed, or there's no live price for ${ticker}, so this happens at the next close. It closed at ${money(lastClose(ticker) ?? 0, 2)} on ${humanDate(index.lastDate)}.`}
+              </div>
+            )}
+          </div>
+
+          {!now && (
+          <div>
             <label htmlFor="trade-date" className={label}>
               Date
             </label>
@@ -214,6 +302,7 @@ export default function TradeDialog({
               {price ? `${ticker} closed at ${money(price, 2)} on ${humanDate(day)}.` : ""}
             </div>
           </div>
+          )}
 
           <div>
             <span className={label}>How much</span>
@@ -276,11 +365,17 @@ export default function TradeDialog({
               </div>
             )}
             <div className="mt-1 text-[11px] text-muted" data-testid="trade-available">
-              {kind === "sell"
-                ? held > 0 && price
-                  ? `Held on ${humanDate(day)}: ${shareText(held)} shares, worth ${money(held * price, 2)}.`
-                  : `No ${ticker} held on ${humanDate(day)}.`
-                : `Cash you can spend on ${humanDate(day)}: ${money(cash, 2)}${cash < state.cash - 0.5 ? " (the rest is used by later purchases)" : ""}.`}
+              {now
+                ? kind === "sell"
+                  ? held > 0 && price
+                    ? `Held now: ${shareText(held)} shares, worth about ${money(held * price, 2)}.`
+                    : `No ${ticker} held now.`
+                  : `Cash you can spend now: ${money(cash, 2)}${state.pending.length ? " (counting your orders waiting to fill)" : ""}.`
+                : kind === "sell"
+                  ? held > 0 && price
+                    ? `Held on ${humanDate(day)}: ${shareText(held)} shares, worth ${money(held * price, 2)}.`
+                    : `No ${ticker} held on ${humanDate(day)}.`
+                  : `Cash you can spend on ${humanDate(day)}: ${money(cash, 2)}${cash < state.cash - 0.5 ? " (the rest is used by later purchases)" : ""}.`}
             </div>
           </div>
 
@@ -306,7 +401,9 @@ export default function TradeDialog({
               <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
                 <dt className="text-muted">{kind === "sell" ? "Sells" : "Buys"}</dt>
                 <dd className="num m-0 text-right" data-testid="trade-preview-shares">
-                  {shareText(f.units)} shares at {money(f.price, 2)} on {humanDate(f.date)}
+                  {now ? "About " : ""}
+                  {shareText(f.units)} shares at {money(f.price, 2)}
+                  {now ? (live ? " (live)" : " (last close; the next close decides)") : ` on ${humanDate(f.date)}`}
                 </dd>
                 <dt className="text-muted">{kind === "sell" ? "Brings in" : "Costs"}</dt>
                 <dd className="num m-0 text-right font-medium">{money(f.amount, 2)}</dd>
@@ -334,7 +431,7 @@ export default function TradeDialog({
                 )}
                 {cashAfter !== undefined && (
                   <>
-                    <dt className="text-muted">Cash then</dt>
+                    <dt className="text-muted">{now ? "Cash after" : "Cash then"}</dt>
                     <dd className="num m-0 text-right">{money(cashAfter, 2)}</dd>
                   </>
                 )}
@@ -348,7 +445,7 @@ export default function TradeDialog({
             <button
               type="button"
               onClick={place}
-              disabled={busy || !check?.ok || !!server?.problem}
+              disabled={busy || !ok || !!server?.problem}
               className="rounded-sm bg-accent px-4 py-2 text-[13px] font-medium text-paper disabled:opacity-50"
               data-testid="trade-confirm"
             >

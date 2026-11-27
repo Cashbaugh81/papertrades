@@ -1,9 +1,15 @@
 // POST /functions/v1/trades
 //   { action: "place", portfolioId, trade: { kind: "buy"|"sell", ticker, date, amount?, fraction? } }
+//   { action: "place", portfolioId, trade: { kind, ticker, now: true, amount?, fraction? } }
+//     → { ok: true, id, live?: { price, at } }
 //   { action: "delete", txId }
 //   → { ok: true, id? } or { ok: false, problem, others: [{ txId, date, reason }] }
 //
-// Buys and sells on a date, at that day's close (buy/sell plan, phase 2). The
+// Buys and sells on a date, at that day's close (buy/sell plan, phase 2), or
+// "now" (phase 3): while the market is open, at the live price the server takes
+// this moment, done on the spot (later kept as a ratio to that day's close);
+// otherwise at the next close, pending until then and cancellable (deleted).
+// The
 // server has the final say: it replays the portfolio's whole history with the
 // app's own engine (the same code the trade dialog previews with) and saves
 // only if this trade works and no other trade stops working. Rules:
@@ -16,6 +22,10 @@ import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import {
   buildIndex,
   checkDelete,
+  checkNowTrade,
+  closeInstant,
+  computeState,
+  nyDate,
   checkTrade,
   normaliseTicker,
   rowToPortfolio,
@@ -27,6 +37,37 @@ import { corsHeaders, json } from "../_shared/http.ts";
 
 const MAX_HELD = 8;
 const LOOKBACK_DAYS = 10;
+/** A live quote older than this isn't live (a halt, a holiday, the feed lagging). */
+const MAX_AGE_MS = 15 * 60_000;
+
+/** Open: a weekday, from 9:30 New York to the close (13:00 on a known half day). Holidays are caught by quote freshness. */
+function marketOpen(now: number): boolean {
+  const day = nyDate(now);
+  const dow = new Date(`${day}T12:00:00Z`).getUTCDay();
+  if (dow === 0 || dow === 6) return false;
+  const hm = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+    .formatToParts(now)
+    .reduce((a, x) => (x.type === "hour" ? a + Number(x.value) * 60 : x.type === "minute" ? a + Number(x.value) : a), 0);
+  return hm >= 9 * 60 + 30 && now < closeInstant(day);
+}
+
+/** A fresh live price for `ticker` from Tiingo's IEX feed, taken now, or null. */
+async function livePrice(ticker: string, now: number): Promise<{ price: number; at: string } | null> {
+  const token = Deno.env.get("TIINGO_API_KEY");
+  if (!token || !marketOpen(now)) return null;
+  const res = await fetch(`https://api.tiingo.com/iex/?tickers=${ticker.toLowerCase()}`, {
+    headers: { Authorization: `Token ${token}`, "Content-Type": "application/json" },
+  });
+  if (!res.ok) return null;
+  const rows = (await res.json()) as Record<string, unknown>[];
+  const row = (Array.isArray(rows) ? rows : []).find((r) => String(r.ticker ?? "").toUpperCase() === ticker);
+  if (!row) return null;
+  const price = Number(row.tngoLast ?? row.last);
+  const at = Date.parse(String(row.timestamp ?? row.lastSaleTimestamp ?? ""));
+  if (!(price > 0) || !Number.isFinite(at)) return null;
+  if (now - at > MAX_AGE_MS || at - now > 60_000 || nyDate(at) !== nyDate(now) || !marketOpen(at)) return null;
+  return { price, at: new Date(now).toISOString() };
+}
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 type Db = SupabaseClient<any, "public", any>;
@@ -54,6 +95,73 @@ async function indexFor(db: Db, p: { startDate: string }, tickers: string[]) {
   const { data, error } = await db.rpc("price_series", { p_tickers: tickers, p_from: from });
   if (error) throw error;
   return { index: buildIndex(seriesToBundle(data ?? [])), have: new Set((data ?? []).map((r: { ticker: string }) => r.ticker)) };
+}
+
+type NowArgs = {
+  prow: Record<string, any>;
+  p: any;
+  uid: string;
+  kind: "buy" | "sell";
+  ticker: string;
+  amount?: number;
+  fraction?: number;
+};
+
+/** A "now" order: at the live price if the market's open and there is one, else at the next close. */
+async function placeNow(req: Request, db: Db, a: NowArgs) {
+  const { prow, p, uid, kind, ticker, amount, fraction } = a;
+  const nowMs = Date.now();
+  const heldOrPending = [...new Set([...tickersFor(p), ticker])];
+  const { index, have } = await indexFor(db, p, heldOrPending);
+  if (!have.has(ticker)) return refuse(req, `There are no prices for ${ticker} yet. Look it up first.`);
+  const state = computeState(index, p, index.lastDate);
+  const live = await livePrice(ticker, nowMs);
+  const last = index.close(ticker, index.lastDate) ?? 0;
+  const price = live?.price ?? last;
+  if (!(price > 0)) return refuse(req, `There's no recent price for ${ticker}.`);
+  const problem = checkNowTrade(state, { kind, ticker, amount, fraction }, price, (t: string) => index.close(t, index.lastDate));
+  if (problem) return refuse(req, problem);
+
+  const id = crypto.randomUUID();
+  const placedAt = new Date(nowMs).toISOString();
+  const today = nyDate(nowMs);
+  // With a live price the trade happens now, at that price: replay the whole
+  // history with it (as for a dated trade) and save it as done.
+  let fill: { date: string; price: number; units: number; amount: number } | undefined;
+  if (live) {
+    const tx = { id, kind, date: today, placedAt, ticker, quote: live, ...(amount !== undefined ? { amount } : { fraction }) };
+    const check = checkTrade(index, p, tx, index.lastDate);
+    if (check.own) return refuse(req, check.own);
+    if (check.others.length) {
+      return refuse(req, `This would stop ${check.others.length === 1 ? "another trade" : `${check.others.length} other trades`} from working.`, check.others);
+    }
+    fill = check.fill;
+    if (!fill) return refuse(req, "That trade couldn't be made just now. Try again.");
+  }
+  const { error: ie } = await db.from("transactions").insert({
+    id,
+    portfolio_id: prow.id,
+    user_id: uid,
+    kind,
+    ticker,
+    amount: amount ?? null,
+    fraction: fraction ?? null,
+    trade_date: today,
+    placed_at: placedAt,
+    quote: live,
+    ...(fill
+      ? {
+          status: "filled",
+          filled_on: fill.date,
+          fill_price: Math.round(fill.price * 1e6) / 1e6,
+          fill_units: Math.round(fill.units * 1e10) / 1e10,
+          fill_amount: Math.round(fill.amount * 100) / 100,
+          processed_at: placedAt,
+        }
+      : { status: "pending" }),
+  });
+  if (ie) throw ie;
+  return json(req, { ok: true, id, ...(live ? { live } : {}) });
 }
 
 function refuse(req: Request, problem: string, others: unknown[] = []) {
@@ -87,7 +195,8 @@ Deno.serve(async (req) => {
       const date = typeof t.date === "string" && DATE_RE.test(t.date) ? t.date : undefined;
       const amount = t.amount === undefined || t.amount === null ? undefined : Math.round(Number(t.amount) * 100) / 100;
       const fraction = t.fraction === undefined || t.fraction === null ? undefined : Math.round(Number(t.fraction) * 1e10) / 1e10;
-      if (!kind || !ticker || !date) return json(req, { error: "a trade needs kind, ticker and date" }, 400);
+      const now = t.now === true;
+      if (!kind || !ticker || (!date && !now)) return json(req, { error: "a trade needs kind, ticker and date (or now)" }, 400);
       if ((amount === undefined) === (fraction === undefined)) return json(req, { error: "give an amount or a fraction" }, 400);
       if (amount !== undefined && !(amount >= 0.01)) return refuse(req, "The amount has to be at least $0.01.");
       if (fraction !== undefined && (kind !== "sell" || !(fraction > 0 && fraction <= 1))) {
@@ -102,6 +211,7 @@ Deno.serve(async (req) => {
       if (prow.slot === 1) return refuse(req, "Portfolio 1 is the benchmark the others are compared with, so it can't be traded.");
 
       const p = rowToPortfolio(prow, set, txs);
+      if (now) return await placeNow(req, db, { prow, p, uid, kind, ticker, amount, fraction });
       const tx = {
         id: crypto.randomUUID(),
         kind,

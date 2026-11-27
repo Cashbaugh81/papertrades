@@ -3,11 +3,14 @@
  * from UTC changes with daylight saving, so it is worked out per day rather
  * than hard-coded.
  *
- * Known simplification: half-day sessions (day after Thanksgiving, Christmas
- * Eve) close at 13:00, but are treated as 16:00 here. An order placed between
- * 13:00 and 16:00 on one of those days fills at that day's close, a few hours
- * after it was set. Everything else is strictly after placement.
+ * Half-day sessions close at 13:00. Those listed in EARLY_CLOSES are known;
+ * add each year's from NYSE's holiday calendar. An unlisted half day is treated
+ * as a 16:00 close, so an order placed between 13:00 and 16:00 on it would fill
+ * at that day's close, a few hours after it was set.
  */
+
+/** Sessions that close at 13:00 New York (NYSE early closes). */
+export const EARLY_CLOSES = new Set(["2026-11-27", "2026-12-24", "2027-11-26"]);
 
 const NY = "America/New_York";
 
@@ -24,12 +27,13 @@ const dateFmt = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 
-/** The UTC instant of the 16:00 New York close on trading day `day` (YYYY-MM-DD). */
+/** The UTC instant of the New York close (16:00, or 13:00 on a half day) on trading day `day` (YYYY-MM-DD). */
 export function closeInstant(day: string): number {
+  const bell = EARLY_CLOSES.has(day) ? 13 : 16;
   // 16:00 New York is 20:00 UTC in summer (EDT) and 21:00 UTC in winter (EST).
-  for (const utcHour of [20, 21]) {
+  for (const utcHour of [bell + 4, bell + 5]) {
     const t = Date.parse(`${day}T${String(utcHour).padStart(2, "0")}:00:00Z`);
-    if (Number(hourFmt.format(t)) === 16) return t;
+    if (Number(hourFmt.format(t)) === bell) return t;
   }
   // Unreachable for New York, but never fill early if it somehow happens.
   return Date.parse(`${day}T21:00:00Z`);
