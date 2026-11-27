@@ -3,6 +3,11 @@
 //   { action: "place", portfolioId, trade: { kind, ticker, now: true, amount?, fraction? } }
 //     → { ok: true, id, live?: { price, at } }
 //   { action: "delete", txId }
+//   { action: "copy", fromPortfolioId, toSetId, toSlot }
+//     → { ok: true, copied, skipped: [{ date, what, reason }] }
+//     Copies one portfolio's trades into another (a clone, or the same slot of
+//     a comparison restarted on another date). Each is replayed in order and
+//     kept only if it still works there; trades before the new start are left out.
 //   → { ok: true, id? } or { ok: false, problem, others: [{ txId, date, reason }] }
 //
 // Buys and sells on a date, at that day's close (buy/sell plan, phase 2), or
@@ -164,6 +169,100 @@ async function placeNow(req: Request, db: Db, a: NowArgs) {
   return json(req, { ok: true, id, ...(live ? { live } : {}) });
 }
 
+/** "The Nov 3, 2026 sale of NVDA" */
+function tradeName(t: { kind: string; ticker: string; date: string }): string {
+  const d = new Date(`${t.date}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  return `The ${d} ${t.kind === "buy" ? "purchase" : "sale"} of ${t.ticker}`;
+}
+
+async function copyTrades(req: Request, db: Db, uid: string, fromId: string, toSetId: string, toSlot: number) {
+  const { data: from, error: fe } = await db.from("portfolios").select("id, user_id").eq("id", fromId).maybeSingle();
+  if (fe) throw fe;
+  if (!from || from.user_id !== uid) return json(req, { error: "portfolio not found" }, 404);
+  const { data: to, error: te } = await db.from("portfolios").select("id").eq("set_id", toSetId).eq("slot", toSlot).maybeSingle();
+  if (te) throw te;
+  if (!to) return json(req, { error: "portfolio not found" }, 404);
+  const loaded = await load(db, to.id, uid);
+  if (!loaded) return json(req, { error: "portfolio not found" }, 404);
+  const { prow, set, txs, plan } = loaded;
+  if (plan !== "paid" && plan !== "admin") return json(req, { ok: false, upgrade: true, problem: "Trading is part of Premium." });
+  if (set.archived_at) return refuse(req, "That comparison has been closed.");
+  if (prow.slot === 1) return json(req, { ok: true, copied: 0, skipped: [] });
+
+  const { data: src, error: se } = await db
+    .from("transactions")
+    .select("*")
+    .eq("portfolio_id", fromId)
+    .in("kind", ["buy", "sell"])
+    .neq("status", "rejected")
+    .order("created_at");
+  if (se) throw se;
+  if (!src?.length) return json(req, { ok: true, copied: 0, skipped: [] });
+
+  let p = rowToPortfolio(prow, set, txs);
+  const extra = src.map((r: any) => r.ticker as string);
+  const { index } = await indexFor(db, p, [...new Set([...tickersFor(p), ...extra])]);
+  const skipped: { date: string; what: string; reason: string }[] = [];
+  const rows: Record<string, unknown>[] = [];
+  for (const r of src as any[]) {
+    const what = tradeName({ kind: r.kind, ticker: r.ticker, date: r.trade_date });
+    if (r.trade_date < p.startDate) {
+      skipped.push({ date: r.trade_date, what, reason: "It's before this portfolio starts." });
+      continue;
+    }
+    const tx: any = {
+      id: crypto.randomUUID(),
+      kind: r.kind,
+      date: r.trade_date,
+      ticker: r.ticker,
+      ...(r.amount !== null ? { amount: Number(r.amount) } : { fraction: Number(r.fraction) }),
+      ...(r.placed_at ? { placedAt: r.placed_at } : {}),
+      ...(r.quote ? { quote: r.quote } : {}),
+    };
+    const check = checkTrade(index, p, tx, index.lastDate);
+    if (check.own || check.others.length) {
+      skipped.push({ date: r.trade_date, what, reason: check.own ?? "It would stop an earlier trade from working." });
+      continue;
+    }
+    if (tickersHeldAtOnce(check.state) > MAX_HELD) {
+      skipped.push({ date: r.trade_date, what, reason: `A portfolio can hold up to ${MAX_HELD} different stocks at once.` });
+      continue;
+    }
+    p = { ...p, tx: [...p.tx, tx] };
+    const f = check.fill;
+    rows.push({
+      id: tx.id,
+      portfolio_id: prow.id,
+      user_id: uid,
+      kind: r.kind,
+      ticker: r.ticker,
+      amount: r.amount,
+      fraction: r.fraction,
+      trade_date: r.trade_date,
+      placed_at: r.placed_at,
+      quote: r.quote,
+      ...(f
+        ? r.placed_at
+          ? {
+              status: "filled",
+              filled_on: f.date,
+              fill_price: Math.round(f.price * 1e6) / 1e6,
+              fill_units: Math.round(f.units * 1e10) / 1e10,
+              fill_amount: Math.round(f.amount * 100) / 100,
+              processed_at: new Date().toISOString(),
+            }
+          : { status: "filled" }
+        : { status: "pending" }),
+    });
+  }
+  // One at a time, so they keep their order (the engine orders by when each was added).
+  for (const row of rows) {
+    const { error: ie } = await db.from("transactions").insert(row);
+    if (ie) throw ie;
+  }
+  return json(req, { ok: true, copied: rows.length, skipped });
+}
+
 function refuse(req: Request, problem: string, others: unknown[] = []) {
   return json(req, { ok: false, problem, others });
 }
@@ -269,6 +368,10 @@ Deno.serve(async (req) => {
       const { error: de } = await db.from("transactions").delete().eq("id", txId);
       if (de) throw de;
       return json(req, { ok: true });
+    }
+
+    if (body.action === "copy") {
+      return await copyTrades(req, db, uid, String(body.fromPortfolioId ?? ""), String(body.toSetId ?? ""), Number(body.toSlot));
     }
 
     return json(req, { error: "unknown action" }, 400);

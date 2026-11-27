@@ -217,7 +217,7 @@ export async function createSet(input: {
   initial: number;
   weekly: number;
   columns: { slot: number; weights: Mix; name?: string; customName?: string }[];
-}): Promise<void> {
+}): Promise<string | undefined> {
   const { data, error } = await supabase.rpc("create_comparison_set", {
     p_start_date: input.startDate,
     p_initial: input.initial,
@@ -228,6 +228,7 @@ export async function createSet(input: {
   // A live comparison started while the market is open buys at live prices:
   // the server takes them now, once. If that fails it buys at today's close.
   if (typeof data === "string" && input.startDate >= nyDate()) await lockLivePrices(data).catch(() => undefined);
+  return typeof data === "string" ? data : undefined;
 }
 
 export type LiveQuote = { price: number; at: string };
@@ -405,6 +406,9 @@ export type TradeResult = {
   problem?: string;
   upgrade?: boolean;
   others?: { txId: string; date: string; reason: string }[];
+  /** For a copy: how many trades came across, and those left out (with why). */
+  copied?: number;
+  skipped?: { date: string; what: string; reason: string }[];
 };
 
 async function tradesCall(body: Record<string, unknown>): Promise<TradeResult> {
@@ -426,4 +430,22 @@ export function placeTrade(portfolioId: string, trade: TradeRequest): Promise<Tr
 /** Delete a trade (refused if a later trade relies on it). */
 export function deleteTrade(txId: string): Promise<TradeResult> {
   return tradesCall({ action: "delete", txId });
+}
+
+/**
+ * Copy one portfolio's trades into the portfolio in `toSlot` of `toSetId` (a
+ * clone, or a comparison restarted on another date). Each is replayed there
+ * and kept only if it still works; the rest come back in `skipped`.
+ */
+export function copyTrades(fromPortfolioId: string, toSetId: string, toSlot: number): Promise<TradeResult> {
+  return tradesCall({ action: "copy", fromPortfolioId, toSetId, toSlot });
+}
+
+/** "2 trades weren't copied: The Nov 3, 2026 sale of NVDA (It's before this portfolio starts.) …" or null. */
+export function skippedNote(r: TradeResult, where: string): string | null {
+  if (!r.ok) return r.upgrade ? null : `${where}: its trades couldn't be copied (${r.problem ?? "try again"}).`;
+  const s = r.skipped ?? [];
+  if (!s.length) return null;
+  const list = s.map((x) => (x.reason.startsWith(x.what) ? x.reason : `${x.what}: ${x.reason}`).replace(/\.$/, "")).join("; ");
+  return `${where}: ${s.length === 1 ? "1 trade wasn't" : `${s.length} trades weren't`} copied. ${list}.`;
 }

@@ -194,7 +194,7 @@ export default function LandingPage2() {
               "Pretend money only",
               "No brokerage, nothing to link",
               "Real end-of-day prices",
-              "No hindsight: choices fill at the next close",
+              "Trade at live prices, or try any past date as a what-if",
             ].map((t) => (
               <li key={t} className="flex items-center gap-2.5">
                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#1f4d3d" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

@@ -14,10 +14,19 @@ type Props = {
   lookup: (ticker: string) => Promise<unknown>;
   suggestions: string[];
   /** Prefill when starting over or changing the date. */
-  initial?: { amount: number; weekly: number; startDate?: string; mixes?: (Mix | undefined)[]; names?: (string | null)[] };
+  initial?: {
+    amount: number;
+    weekly: number;
+    startDate?: string;
+    mixes?: (Mix | undefined)[];
+    names?: (string | null)[];
+    /** When changing the date: each portfolio's trades (their dates), carried over to the new comparison. */
+    trades?: { slot: number; portfolioId: string; dates: string[] }[];
+  };
   /** Shown when there is a comparison to go back to. */
   onCancel?: () => void;
-  onCreated: () => void;
+  /** The comparison was made (its id, and the slots it has portfolios in). */
+  onCreated: (setId?: string, slots?: number[]) => void;
   /** What this account's plan allows. */
   limits: Limits;
   /** The account just became paid: re-read the plan. */
@@ -64,6 +73,10 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
   const initialNum = Number(amount) || 0;
   const weeklyNum = Number(weekly) || 0;
   const startDate = mode === "today" ? today : pastDate;
+  // Changing the date: trades come along, except those before the new start.
+  const carried = (initial?.trades ?? []).flatMap((t) => t.dates);
+  const tradeCount = limits.plan !== "free" ? carried.length : 0;
+  const dropped = tradeCount && startDate ? carried.filter((d) => d < startDate).length : 0;
   const moneyProblem =
     initialNum < 0 || weeklyNum < 0
       ? "Amounts can't be negative."
@@ -119,7 +132,7 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
     if (problem) return setError(problem);
     setBusy(true);
     try {
-      await createSet({
+      const setId = await createSet({
         startDate,
         initial: initialNum,
         weekly: weeklyNum,
@@ -130,7 +143,10 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
           return [{ slot, weights: mix, name: isMarket ? "Whole US market" : undefined, customName: names[i] || undefined }];
         }),
       });
-      onCreated();
+      onCreated(
+        setId,
+        SLOTS.filter((_, i) => !!checked[i]?.mix),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "That didn't save. Try again.");
     } finally {
@@ -232,6 +248,11 @@ export default function SetupPage({ info, lookup, suggestions, initial, onCancel
             ? "Your money is invested at the next market close, at a price nobody knows yet. This builds a real record of your decisions."
             : "A what-if: you'll see what would have happened, but you're choosing knowing how things turned out. It's labelled that way."}
         </p>
+        {tradeCount > 0 && (
+          <p className="mt-2 text-[12px] leading-snug text-ink" data-testid="setup-trades-note">
+            {tradesNote(tradeCount, dropped, startDate)}
+          </p>
+        )}
       </section>
 
       <div className="mt-5 grid gap-4 md:grid-cols-3">
@@ -376,4 +397,14 @@ function typedMix(rows: Row[]): Mix {
     if (t) out[t] = (out[t] ?? 0) + (Number(r.pct) || 0) / 100;
   }
   return out;
+}
+
+/** What happens to a portfolio's trades when the comparison restarts on `startDate`. */
+function tradesNote(n: number, dropped: number, startDate: string): string {
+  const yours = n === 1 ? "Your trade" : `Your ${n} trades`;
+  if (dropped >= n) {
+    return `${yours} ${n === 1 ? "is" : "are all"} before ${humanDate(startDate)}, so ${n === 1 ? "it's" : "they're"} left out of the new comparison.`;
+  }
+  const except = dropped ? `, except ${dropped === 1 ? "the one" : `the ${dropped}`} before ${humanDate(startDate)}` : "";
+  return `${yours} ${n === 1 ? "comes" : "come"} along to the new comparison${except}. Any that no longer work with a changed mix are left out, and you'll see which.`;
 }

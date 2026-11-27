@@ -25,7 +25,8 @@ type Props = {
   suggestions: string[];
   pricesThrough: string;
   onChangeMix: (portfolioId: string, mix: Mix, note: string) => Promise<void>;
-  onAddColumn: (slot: number, mix: Mix) => Promise<void>;
+  /** Add a portfolio; for a clone, `copyFrom` is the slot whose trades come along. */
+  onAddColumn: (slot: number, mix: Mix, copyFrom?: number) => Promise<void>;
   /** Name a portfolio ("" = back to "Portfolio N"). */
   onRename: (portfolioId: string, name: string) => Promise<void>;
   onCancelTx: (txId: string) => void;
@@ -611,6 +612,9 @@ function EmptyColumn({
     if (!o) onClose?.();
   };
   const [rows, setRows] = useState<Row[]>(initialRows ?? [{ ticker: "", pct: "100" }]);
+  const source = copyOf ? set.columns.find((c) => c.slot === copyOf) : undefined;
+  const copiedTrades =
+    source && limits.plan !== "free" ? source.portfolio.tx.filter((t) => t.kind === "buy" || t.kind === "sell").length : 0;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Opened by "+" or Clone: the card may be below the fold, so bring it to the
@@ -632,7 +636,7 @@ function EmptyColumn({
     setBusy(true);
     setError(null);
     try {
-      await onAddColumn(slot, r.mix);
+      await onAddColumn(slot, r.mix, copyOf);
     } catch (e) {
       setError(e instanceof Error ? e.message : "That didn't save.");
       setBusy(false);
@@ -669,7 +673,11 @@ function EmptyColumn({
             priceDate={set.startDate}
           />
           {copyOf && (
-            <p className="text-[11px] leading-snug text-muted">A copy of portfolio {copyOf}. Adjust it, then add it.</p>
+            <p className="text-[11px] leading-snug text-muted" data-testid="clone-note">
+              A copy of portfolio {copyOf}. Adjust it, then add it.
+              {copiedTrades > 0 &&
+                ` Its ${copiedTrades === 1 ? "trade comes" : `${copiedTrades} trades come`} along too; any that don't work with the new mix are left out, and you'll see which.`}
+            </p>
           )}
           <p className="text-[11px] leading-snug text-muted">
             {set.whatIf

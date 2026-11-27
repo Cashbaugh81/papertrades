@@ -1,4 +1,4 @@
-// 50 beginner lessons for the dashboard's lesson cards: one idea per card,
+// Beginner lessons for the dashboard's lesson cards: one idea per card,
 // a short lesson and a one-line example. US tax rules where taxes come up.
 
 export type LessonCategory =
@@ -319,5 +319,17 @@ export const LESSONS: Lesson[] = [
     title: "Practice with paper trading",
     body: "Paper trading lets you try strategies and feel real market swings with pretend money, at no risk. Real money feels different, so when you go live, start small.",
     example: "Compare a 100% stock portfolio with a 60/40 mix side by side and see how each handles a crash.",
+  },
+  {
+    category: "Taxes, accounts & orders",
+    title: "Selling part of a holding",
+    body: "Your gain on a sale is what you sell for minus what you paid for those exact shares, your cost basis. If you bought at different times, most brokers count the oldest shares as sold first, so each sale can mix older and newer purchases.",
+    example: "You bought 10 shares at $50, then 10 at $80. Sell 10 at $90 and the gain is $400 (on the $50 shares), not $100.",
+  },
+  {
+    category: "Taxes, accounts & orders",
+    title: "The cost of switching",
+    body: "Selling one investment to buy another is two decisions, and in a taxable account the sale can cost you tax on any gain first. Less money then goes into the new pick, so it has to do better just to break even.",
+    example: "Sell $10,000 of a stock with a $3,000 short-term gain: at a 24% rate, $720 goes to tax and $9,280 is left to reinvest.",
   },
 ];
