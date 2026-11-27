@@ -395,10 +395,13 @@ export async function pricesOn(tickers: string[], day: string): Promise<Record<s
 }
 
 /** A trade as the server stores it: dollars or a share of the holding (never shares). */
-export type TradeRequest = { kind: "buy" | "sell"; ticker: string; date: string; amount?: number; fraction?: number };
+/** A trade on a date (at that day's close), or `now` (live price in market hours, else the next close). */
+export type TradeRequest = { kind: "buy" | "sell"; ticker: string; date?: string; now?: true; amount?: number; fraction?: number };
 export type TradeResult = {
   ok: boolean;
   id?: string;
+  /** For a "now" trade placed in market hours: the live price it fills at. */
+  live?: LiveQuote;
   problem?: string;
   upgrade?: boolean;
   others?: { txId: string; date: string; reason: string }[];

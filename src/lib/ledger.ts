@@ -144,7 +144,7 @@ export function fillFor(
   index: PriceIndex,
   tx: Tx,
   days: string[],
-): { day: string; price: number } | undefined {
+): { day: string; price: number; live?: boolean } | undefined {
   if (tx.kind === "rebalance") return rebalanceDay(index, tx, days);
   if (!tx.ticker) return undefined;
   if (tx.placedAt) {
@@ -160,7 +160,13 @@ export function fillFor(
       // The ticker's own close that day. Never fall back to an older close:
       // that would be a price from before the order.
       const px = index.close(tx.ticker, day);
-      if (px !== undefined && px > 0) return { day, price: px };
+      if (px !== undefined && px > 0) {
+        // A "now" order placed in market hours fills at the live price taken
+        // then, once that day's close is in.
+        const q = tx.quote;
+        if (q && nyDate(Date.parse(q.at)) === day) return { day, price: px * (q.ratio ?? q.price / px), live: true };
+        return { day, price: px };
+      }
     }
     return undefined;
   }
@@ -657,6 +663,8 @@ export function computeState(
             kind: t.kind as "buy" | "sell",
             ticker: t.ticker!,
             amount: t.amount ?? (t.units ?? 0) * (closeOn(index, t.ticker!, finalDay) ?? 0),
+            ...(t.fraction !== undefined ? { fraction: t.fraction } : {}),
+            ...(t.quote ? { quote: t.quote } : {}),
             placedAt: t.placedAt ?? t.date,
           },
     )
@@ -892,6 +900,9 @@ function timeline(p: Portfolio, fills: Record<string, Fill>, boughtIn: Record<st
         price: f.price,
         units: f.units,
         ...(tx.fraction !== undefined ? { fraction: tx.fraction } : {}),
+        ...(tx.quote && nyDate(Date.parse(tx.quote.at)) === f.date
+          ? { live: { prices: { [tx.ticker!]: tx.quote.price }, at: tx.quote.at } }
+          : {}),
         ...(f.gain ? { gain: f.gain } : {}),
       });
     }

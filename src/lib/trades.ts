@@ -2,7 +2,7 @@
 // or a deletion against the whole history, and what's available on a date.
 // Shared by the trade dialog (preview) and the server (the final say), so the
 // two always agree.
-import { computeState } from "@/lib/ledger";
+import { computeState, heldOverAYear } from "@/lib/ledger";
 import type { PriceIndex } from "@/lib/prices";
 import type { Fill, Portfolio, PortfolioState, Tx } from "@/lib/types";
 
@@ -88,4 +88,89 @@ export function tickersHeldAtOnce(state: PortfolioState): number {
     most = Math.max(most, n);
   }
   return most + Object.keys(state.waiting).length;
+}
+
+/** At most this many different stocks held at once. */
+export const MAX_HELD = 8;
+
+/**
+ * Check a "now" order (it fills later: at the live price taken now, or at the
+ * next close) against the portfolio as it stands. `state` is the portfolio up
+ * to the latest close, with its other pending orders; `price` is the live
+ * price, or the latest close when there's no live one.
+ *
+ * Money a pending sale will bring in counts towards a purchase, so "sell this,
+ * buy that" works the same day (sales fill before purchases). If a sale that
+ * fills at the close brings in less than this estimate, the purchase is
+ * refused when it fills, with the reason shown.
+ */
+export function checkNowTrade(
+  state: PortfolioState,
+  tx: Pick<Tx, "kind" | "ticker" | "amount" | "fraction">,
+  price: number,
+  priceOf: (ticker: string) => number | undefined,
+): string | undefined {
+  const t = tx.ticker!;
+  const heldUnits = (ticker: string) => state.holdings.find((h) => h.ticker === ticker)?.units ?? 0;
+  /** What pending sales of `ticker` will take, in shares (Infinity once one sells it all). */
+  const pendingSold = (ticker: string, px: number) =>
+    state.pending
+      .filter((o) => o.kind === "sell" && o.ticker === ticker)
+      .reduce((a, o) => a + (o.fraction !== undefined ? (o.fraction >= 1 - 1e-9 ? Infinity : heldUnits(ticker) * o.fraction) : o.amount / (o.quote?.price ?? px)), 0);
+  if (tx.kind === "sell") {
+    const held = heldUnits(t);
+    if (!(held > 1e-9)) return `There's no ${t} to sell.`;
+    const left = held - pendingSold(t, price);
+    if (!(left > 1e-9)) return `All of your ${t} is already being sold.`;
+    const want = tx.fraction !== undefined ? held * tx.fraction : (tx.amount ?? 0) / price;
+    if (want > left * (1 + 1e-9) + 1e-9) {
+      return `That's ${money(want * price)} of ${t}, but only ${money(left * price)} of it is left to sell.`;
+    }
+    return undefined;
+  }
+  const can = freeToSpendNow(state, priceOf);
+  if ((tx.amount ?? 0) > can + 1e-6) {
+    return `That's ${money(tx.amount ?? 0)}, but only ${money(Math.max(0, can))} is free to spend.`;
+  }
+  const tickers = new Set(state.holdings.filter((h) => h.units > 1e-9).map((h) => h.ticker));
+  for (const o of state.pending) if (o.kind === "buy" && o.ticker) tickers.add(o.ticker);
+  for (const w of Object.keys(state.waiting)) tickers.add(w);
+  tickers.add(t);
+  if (tickers.size > MAX_HELD) return `A portfolio can hold up to ${MAX_HELD} different stocks at once.`;
+  return undefined;
+}
+
+function money(n: number): string {
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/**
+ * Cash a "now" purchase can use: cash on hand, less what pending purchases
+ * will take, plus what pending sales will bring in (at their live price, or
+ * `priceOf` — the latest close — for those filling at the close).
+ */
+export function freeToSpendNow(state: PortfolioState, priceOf: (ticker: string) => number | undefined): number {
+  const held = (t: string) => state.holdings.find((h) => h.ticker === t)?.units ?? 0;
+  let n = state.cash;
+  for (const o of state.pending) {
+    if (o.kind === "buy") n -= o.amount;
+    else if (o.kind === "sell" && o.ticker) {
+      n += o.fraction !== undefined ? held(o.ticker) * o.fraction * (o.quote?.price ?? priceOf(o.ticker) ?? 0) : o.amount;
+    }
+  }
+  return Math.max(0, n);
+}
+
+/** Estimated gain (short- and long-term) on selling `units` of `ticker` at `price` on `day`, oldest purchases first. */
+export function estimateGain(state: PortfolioState, ticker: string, units: number, price: number, day: string) {
+  const gain = { shortTerm: 0, longTerm: 0 };
+  let left = units;
+  for (const lot of state.lots.filter((l) => l.ticker === ticker).sort((a, b) => (a.date < b.date ? -1 : 1))) {
+    if (left <= 1e-12) break;
+    const take = Math.min(left, lot.units);
+    const g = take * price - lot.cost * (take / lot.units);
+    gain[heldOverAYear(lot.date, day) ? "longTerm" : "shortTerm"] += g;
+    left -= take;
+  }
+  return gain;
 }

@@ -73,6 +73,7 @@ function weekStarts(calendar, from, to) {
 }
 
 // src/lib/market.ts
+var EARLY_CLOSES = /* @__PURE__ */ new Set(["2026-11-27", "2026-12-24", "2027-11-26"]);
 var NY = "America/New_York";
 var hourFmt = new Intl.DateTimeFormat("en-US", {
   timeZone: NY,
@@ -86,9 +87,10 @@ var dateFmt = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit"
 });
 function closeInstant(day) {
-  for (const utcHour of [20, 21]) {
+  const bell = EARLY_CLOSES.has(day) ? 13 : 16;
+  for (const utcHour of [bell + 4, bell + 5]) {
     const t = Date.parse(`${day}T${String(utcHour).padStart(2, "0")}:00:00Z`);
-    if (Number(hourFmt.format(t)) === 16) return t;
+    if (Number(hourFmt.format(t)) === bell) return t;
   }
   return Date.parse(`${day}T21:00:00Z`);
 }
@@ -132,6 +134,7 @@ function rowToTx(r) {
     kind: r.kind,
     date: r.trade_date,
     placedAt: r.placed_at ?? void 0,
+    ...toQuote(r.quote) ? { quote: toQuote(r.quote) } : {},
     ticker: r.ticker ?? void 0,
     amount: num(r.amount),
     units: num(r.units),
@@ -182,6 +185,9 @@ function seriesToBundle(rows, source = "supabase") {
     if (last && last > generated) generated = last;
   }
   return { generated, source, series };
+}
+function toQuote(v) {
+  return toQuotes({ q: v })?.q;
 }
 
 // src/lib/ledger.ts
@@ -256,7 +262,11 @@ function fillFor(index, tx, days) {
       const day2 = days[i2];
       if (!closesAfter(day2, tx.placedAt)) continue;
       const px2 = index.close(tx.ticker, day2);
-      if (px2 !== void 0 && px2 > 0) return { day: day2, price: px2 };
+      if (px2 !== void 0 && px2 > 0) {
+        const q = tx.quote;
+        if (q && nyDate(Date.parse(q.at)) === day2) return { day: day2, price: px2 * (q.ratio ?? q.price / px2), live: true };
+        return { day: day2, price: px2 };
+      }
     }
     return void 0;
   }
@@ -630,6 +640,8 @@ function computeState(index, p, endDate) {
       kind: t.kind,
       ticker: t.ticker,
       amount: t.amount ?? (t.units ?? 0) * (closeOn(index, t.ticker, finalDay) ?? 0),
+      ...t.fraction !== void 0 ? { fraction: t.fraction } : {},
+      ...t.quote ? { quote: t.quote } : {},
       placedAt: t.placedAt ?? t.date
     }
   ).sort((a, b) => a.placedAt < b.placedAt ? -1 : 1);
@@ -780,6 +792,7 @@ function timeline(p, fills, boughtIn) {
         price: f.price,
         units: f.units,
         ...tx.fraction !== void 0 ? { fraction: tx.fraction } : {},
+        ...tx.quote && nyDate(Date.parse(tx.quote.at)) === f.date ? { live: { prices: { [tx.ticker]: tx.quote.price }, at: tx.quote.at } } : {},
         ...f.gain ? { gain: f.gain } : {}
       });
     }
@@ -848,6 +861,47 @@ function tickersHeldAtOnce(state) {
   }
   return most + Object.keys(state.waiting).length;
 }
+var MAX_HELD = 8;
+function checkNowTrade(state, tx, price, priceOf) {
+  const t = tx.ticker;
+  const heldUnits = (ticker) => state.holdings.find((h) => h.ticker === ticker)?.units ?? 0;
+  const pendingSold = (ticker, px) => state.pending.filter((o) => o.kind === "sell" && o.ticker === ticker).reduce((a, o) => a + (o.fraction !== void 0 ? o.fraction >= 1 - 1e-9 ? Infinity : heldUnits(ticker) * o.fraction : o.amount / (o.quote?.price ?? px)), 0);
+  if (tx.kind === "sell") {
+    const held = heldUnits(t);
+    if (!(held > 1e-9)) return `There's no ${t} to sell.`;
+    const left = held - pendingSold(t, price);
+    if (!(left > 1e-9)) return `All of your ${t} is already being sold.`;
+    const want = tx.fraction !== void 0 ? held * tx.fraction : (tx.amount ?? 0) / price;
+    if (want > left * (1 + 1e-9) + 1e-9) {
+      return `That's ${money2(want * price)} of ${t}, but only ${money2(left * price)} of it is left to sell.`;
+    }
+    return void 0;
+  }
+  const can = freeToSpendNow(state, priceOf);
+  if ((tx.amount ?? 0) > can + 1e-6) {
+    return `That's ${money2(tx.amount ?? 0)}, but only ${money2(Math.max(0, can))} is free to spend.`;
+  }
+  const tickers = new Set(state.holdings.filter((h) => h.units > 1e-9).map((h) => h.ticker));
+  for (const o of state.pending) if (o.kind === "buy" && o.ticker) tickers.add(o.ticker);
+  for (const w of Object.keys(state.waiting)) tickers.add(w);
+  tickers.add(t);
+  if (tickers.size > MAX_HELD) return `A portfolio can hold up to ${MAX_HELD} different stocks at once.`;
+  return void 0;
+}
+function money2(n) {
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function freeToSpendNow(state, priceOf) {
+  const held = (t) => state.holdings.find((h) => h.ticker === t)?.units ?? 0;
+  let n = state.cash;
+  for (const o of state.pending) {
+    if (o.kind === "buy") n -= o.amount;
+    else if (o.kind === "sell" && o.ticker) {
+      n += o.fraction !== void 0 ? held(o.ticker) * o.fraction * (o.quote?.price ?? priceOf(o.ticker) ?? 0) : o.amount;
+    }
+  }
+  return Math.max(0, n);
+}
 
 // src/server/tiingo.ts
 var HISTORY_START = "2000-01-01";
@@ -902,7 +956,9 @@ export {
   HISTORY_START,
   buildIndex,
   checkDelete,
+  checkNowTrade,
   checkTrade,
+  closeInstant,
   computeState,
   incrementalStart,
   isFresh,

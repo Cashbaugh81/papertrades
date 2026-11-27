@@ -161,6 +161,7 @@ export type Database = {
           kind: string;
           note: string | null;
           placed_at: string | null;
+          quote: Json | null;
           portfolio_id: string;
           processed_at: string | null;
           reject_reason: string | null;
@@ -182,6 +183,7 @@ export type Database = {
           kind: string;
           note?: string | null;
           placed_at?: string | null;
+          quote?: Json | null;
           portfolio_id: string;
           processed_at?: string | null;
           reject_reason?: string | null;
@@ -203,6 +205,7 @@ export type Database = {
           kind?: string;
           note?: string | null;
           placed_at?: string | null;
+          quote?: Json | null;
           portfolio_id?: string;
           processed_at?: string | null;
           reject_reason?: string | null;

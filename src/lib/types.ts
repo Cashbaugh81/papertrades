@@ -38,6 +38,12 @@ export type Tx = {
    * already known when it was placed.
    */
   placedAt?: string;
+  /**
+   * A "now" buy or sell placed while the market was open: the live price the
+   * server took then. It fills on that day at this price (carried as a ratio
+   * to the day's close, like Portfolio.startQuotes) instead of at the close.
+   */
+  quote?: StartQuote;
   ticker?: string;
   units?: number;
   /**
@@ -132,6 +138,10 @@ export type PendingOrder = {
   amount: number;
   /** For a rebalance: the new mix. */
   weights?: Record<string, number>;
+  /** For a sale of part or all of a holding (1 = all). */
+  fraction?: number;
+  /** A "now" order placed in market hours: the live price it fills at once the day's close is in. */
+  quote?: StartQuote;
   placedAt: string;
 };
 

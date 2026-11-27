@@ -37,6 +37,7 @@ export function rowToTx(r: TransactionRow): Tx {
     kind: r.kind as TxKind,
     date: r.trade_date,
     placedAt: r.placed_at ?? undefined,
+    ...(toQuote(r.quote) ? { quote: toQuote(r.quote) } : {}),
     ticker: r.ticker ?? undefined,
     amount: num(r.amount),
     units: num(r.units),
@@ -103,4 +104,9 @@ export function seriesToBundle(rows: SeriesRow[], source = "supabase"): PriceBun
     if (last && last > generated) generated = last;
   }
   return { generated, source, series };
+}
+
+/** One live price as stored on a "now" trade, or undefined if malformed. */
+export function toQuote(v: unknown): StartQuote | undefined {
+  return toQuotes({ q: v })?.q;
 }

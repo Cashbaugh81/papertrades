@@ -40,6 +40,7 @@ const dlg = (page: Page) => page.locator('[data-testid="trade-dialog"]');
 async function openTrade(page: Page, testId: string) {
   await page.click(`[data-testid="${testId}"]`);
   await dlg(page).waitFor({ timeout: 5_000 });
+  await dlg(page).locator('[data-when="date"]').click(); // these are all trades on a past date (now trades: now.check.ts)
 }
 async function waitPreview(page: Page) {
   await page.waitForTimeout(300);

@@ -249,3 +249,68 @@ describe("taxes on sales", () => {
     expect(s.taxes.actualTax).toBeCloseTo(120, 6); // 2024's tax stands; 2025's loss doesn't erase it
   });
 });
+
+describe("now trades (phase 3)", () => {
+  // Placed at 11:00 New York on day 150 (EST/EDT differ; 16:00 UTC is 11:00 or 12:00 NY, before the close either way).
+  const at = (i: number) => `${days[i]}T16:00:00.000Z`;
+  const nowSell = (id: string, i: number, fraction: number, livePx?: number): Tx => ({
+    id,
+    kind: "sell",
+    date: days[i],
+    placedAt: at(i),
+    ticker: "AAA",
+    fraction,
+    ...(livePx ? { quote: { price: livePx, at: at(i) } } : {}),
+  });
+
+  it("a sale placed in market hours fills that day at the live price, not the close", () => {
+    const s = computeState(index, pf([nowSell("n", 150, 0.5, 112)]), end);
+    expect(s.fills.n).toMatchObject({ date: days[150], price: expect.closeTo(112, 9) });
+    expect(s.cash).toBeCloseTo(50 * 112, 6);
+    expect(s.events.find((e) => e.txId === "n")?.live).toEqual({ prices: { AAA: 112 }, at: at(150) });
+  });
+
+  it("the live price is carried as a ratio, so re-adjusted closes move it with them", () => {
+    const halved = makeIndex((_i, px) => px / 2); // e.g. a 2-for-1 split re-adjusts history
+    const frozen: Tx = { ...nowSell("n", 150, 0.5), quote: { price: 112, at: at(150), ratio: 112 / 110 } };
+    const s = computeState(halved, pf([frozen]), end);
+    expect(s.fills.n.price).toBeCloseTo(55 * (112 / 110), 9);
+  });
+
+  it("without a live price it fills at the next close, and is pending until that close is in", () => {
+    const s = computeState(index, pf([nowSell("n", 150, 0.5)]), end);
+    expect(s.fills.n).toMatchObject({ date: days[150], price: 110 });
+    const before = computeState(index, pf([nowSell("n", 150, 0.5, 112)]), days[149]);
+    expect(before.fills.n).toBeUndefined();
+    expect(before.pending).toEqual([expect.objectContaining({ txId: "n", kind: "sell", fraction: 0.5, quote: { price: 112, at: at(150) } })]);
+  });
+
+  it("checks a now order against what's held, pending sales, and free cash", async () => {
+    const { checkNowTrade, freeToSpendNow } = await import("@/lib/trades");
+    const s = computeState(index, pf([nowSell("n", 599, 0.5, 121)]), days[598]); // pending
+    const last = (t: string) => index.close(t, days[598]);
+    expect(checkNowTrade(s, { kind: "sell", ticker: "AAA", fraction: 0.5 }, 120, last)).toBeUndefined();
+    expect(checkNowTrade(s, { kind: "sell", ticker: "AAA", fraction: 0.6 }, 120, last)).toMatch(/left to sell/);
+    expect(checkNowTrade(s, { kind: "sell", ticker: "BBB", fraction: 1 }, 50, last)).toMatch(/no BBB/);
+    // The pending sale brings in 50 shares at 121.
+    expect(freeToSpendNow(s, last)).toBeCloseTo(50 * 121, 6);
+    expect(checkNowTrade(s, { kind: "buy", ticker: "BBB", amount: 6000 }, 50, last)).toBeUndefined();
+    expect(checkNowTrade(s, { kind: "buy", ticker: "BBB", amount: 6100 }, 50, last)).toMatch(/free to spend/);
+  });
+
+  it("a sale then a purchase placed together fill the same day, the sale first", () => {
+    const b: Tx = { id: "b", kind: "buy", date: days[150], placedAt: `${days[150]}T16:01:00.000Z`, ticker: "BBB", amount: 5000, quote: { price: 51, at: `${days[150]}T16:01:00.000Z` } };
+    const s = computeState(index, pf([nowSell("n", 150, 0.5, 112), b]), end);
+    expect(s.fills.b).toMatchObject({ date: days[150], price: expect.closeTo(51, 9), units: expect.closeTo(5000 / 51, 9) });
+    expect(Object.keys(s.rejections)).toEqual([]);
+  });
+});
+
+describe("half days", () => {
+  it("the day after Thanksgiving closes at 13:00 New York", async () => {
+    const { closeInstant, closesAfter } = await import("@/lib/market");
+    expect(new Date(closeInstant("2026-11-27")).toISOString()).toBe("2026-11-27T18:00:00.000Z");
+    expect(new Date(closeInstant("2026-11-30")).toISOString()).toBe("2026-11-30T21:00:00.000Z");
+    expect(closesAfter("2026-11-27", "2026-11-27T18:30:00.000Z")).toBe(false); // 13:30 → next close
+  });
+});
