@@ -262,6 +262,9 @@ function fillFor(index, tx, days) {
       const day2 = days[i2];
       if (!closesAfter(day2, tx.placedAt)) continue;
       const px2 = index.close(tx.ticker, day2);
+      if (tx.quote && nyDate(Date.parse(tx.quote.at)) === day2 && !(px2 !== void 0 && px2 > 0)) {
+        return { day: day2, price: tx.quote.price, live: true };
+      }
       if (px2 !== void 0 && px2 > 0) {
         const q = tx.quote;
         if (q && nyDate(Date.parse(q.at)) === day2) return { day: day2, price: px2 * (q.ratio ?? q.price / px2), live: true };
@@ -452,6 +455,7 @@ function computeState(index, p, endDate) {
   const fills = {};
   const rejections = {};
   const pendingTx = [];
+  const liveTx = [];
   let invested = 0;
   const byDay = /* @__PURE__ */ new Map();
   const lateDeposits = [];
@@ -481,6 +485,10 @@ function computeState(index, p, endDate) {
         rejections[tx.id] = { date: tx.date, reason };
         continue;
       }
+    }
+    if ((tx.kind === "buy" || tx.kind === "sell") && tx.quote && endDate >= index.lastDate && nyDate(Date.parse(tx.quote.at)) > index.lastDate) {
+      liveTx.push(tx);
+      continue;
     }
     const f = fillFor(index, tx, dates);
     if (!f) {
@@ -619,7 +627,17 @@ function computeState(index, p, endDate) {
   const variance = rets.length > 1 ? rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1) : 0;
   const volatility = Math.sqrt(variance) * Math.sqrt(252);
   const finalDay = dates.length ? dates[dates.length - 1] : start;
-  const value = values.length ? values[values.length - 1] : book.cash + waitingTotal(book);
+  liveTx.sort((a, b) => eventKey(a) < eventKey(b) ? -1 : eventKey(a) > eventKey(b) ? 1 : 0);
+  for (const tx of liveTx) {
+    const day = nyDate(Date.parse(tx.quote.at));
+    const before = book.rejected.length;
+    const fill = applyOrder(book, tx, day, tx.quote.price);
+    if (fill) fills[tx.id] = { ...fill, live: [tx.ticker] };
+    else if (book.rejected.length > before) {
+      rejections[tx.id] = { date: day, reason: book.rejected[book.rejected.length - 1] };
+    }
+  }
+  const value = liveTx.length ? [...book.units].reduce((a, [t, u]) => a + (u > 1e-9 ? u * (closeOn(index, t, finalDay) ?? 0) : 0), 0) + book.cash + waitingTotal(book) : values.length ? values[values.length - 1] : book.cash + waitingTotal(book);
   const holdings = [];
   let totalHoldings = 0;
   for (const [ticker, units] of book.units) {

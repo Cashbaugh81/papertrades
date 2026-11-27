@@ -1,6 +1,6 @@
 // "Now" trades (buy/sell phase 3), run while the market is open: the dialog
-// shows the live price, a sale and a purchase placed now wait to fill, they
-// can be cancelled, and the server takes its own live price.
+// shows the live price; a sale and a purchase placed now happen on the spot at
+// the server's own live price, and show straight away.
 // Needs a confirmed throwaway Premium account whose comparison has NVDA 100%
 // in portfolio 2 and no trades:
 //   NOW="email password" npx tsx checks/now.check.ts   (with `npx vite preview --port 4173` running)
@@ -40,20 +40,25 @@ check("the live price shows, with its time", /Live price \$[\d,.]+ at \d{1,2}:\d
 const p1 = await preview();
 check("the preview estimates the sale at the live price, with gain and tax", /About [\d.]+ shares at \$[\d,.]+ \(live\)[\s\S]*Brings in[\s\S]*(Gain|Loss) on it[\s\S]*Estimated tax[\s\S]*Cash after/.test(p1), p1);
 await page.screenshot({ path: "checks/out/now-sell.png" });
+const sharesBefore = Number((await page.locator("tr", { hasText: "NVDA" }).first().innerText()).match(/\t([\d.]+)\t/)?.[1]);
 await dlg.locator('[data-testid="trade-confirm"]').click();
 await dlg.waitFor({ state: "detached", timeout: 30_000 });
-await page.locator('[data-testid="pending-row"]').first().waitFor({ timeout: 15_000 });
-const rows = await page.locator('[data-testid="pending-row"]').allInnerTexts();
-check("the sale waits to fill, at the live price taken by the server", rows.length === 1 && /Sell 50% of NVDA at the live price, \$[\d,.]+ \(\d{1,2}:\d\d [AP]M ET\)/.test(rows[0]), rows.join(" / "));
+await page.locator('[data-testid="trade-row"]').first().waitFor({ timeout: 15_000 });
+const rows = await page.locator('[data-testid="trade-row"]').allInnerTexts();
+check("the sale is done at once, at the live price", rows.length === 1 && /Sold 50% of NVDA \([\d.]+ shares at \$[\d,.]+\) for \$[\d,.]+: (gain|loss) \$[\d,.]+, short-term\. The money went to cash\. Live price at \d{1,2}:\d\d [AP]M ET\./.test(rows[0]), rows.join(" / "));
+check("nothing is left waiting", (await page.locator('[data-testid="pending-row"]').count()) === 0);
+const sharesAfter = Number((await page.locator("tr", { hasText: "NVDA" }).first().innerText()).match(/\t([\d.]+)\t/)?.[1]);
+check("the holding halved", Math.abs(sharesAfter - sharesBefore / 2) < 0.0002, `${sharesBefore} → ${sharesAfter}`);
+check("there's a cash row", (await page.locator('[data-testid="detail-cash-row"]').count()) === 1);
 
-// Buy with the money the sale will bring in.
-await page.locator('[data-testid="detail-trades"] button', { hasText: "Buy with cash" }).click();
+// Buy with the money from the sale.
+await page.click('[data-testid="trade-cash"]');
 await dlg.waitFor();
 await page.fill('[data-testid="trade-ticker"]', "AAPL");
 await page.keyboard.press("Tab");
 await page.waitForTimeout(2500);
 const avail = await dlg.locator('[data-testid="trade-available"]').innerText();
-check("cash you can spend counts the pending sale", /Cash you can spend now: \$[1-9][\d,.]+ \(counting your orders waiting to fill\)/.test(avail), avail);
+check("cash you can spend is the sale's money", /Cash you can spend now: \$[1-9][\d,.]+\./.test(avail), avail);
 await page.fill('[data-testid="trade-amount"]', "999999");
 check("too much is refused before sending", /free to spend/.test(await preview()));
 check("…and can't be confirmed", await dlg.locator('[data-testid="trade-confirm"]').isDisabled());
@@ -63,17 +68,21 @@ check("a $1,000 purchase previews", /About [\d.]+ shares at \$[\d,.]+ \((live|la
 await dlg.locator('[data-testid="trade-confirm"]').click();
 await dlg.waitFor({ state: "detached", timeout: 30_000 });
 await page.waitForTimeout(1500);
-const rows2 = await page.locator('[data-testid="pending-row"]').allInnerTexts();
-check("both orders wait", rows2.length === 2 && rows2.some((r) => /Buy \$1,000\.00 of AAPL/.test(r)), rows2.join(" / "));
+const rows2 = await page.locator('[data-testid="trade-row"]').allInnerTexts();
+check("the purchase is done too", rows2.length === 2 && rows2.some((r) => /Bought [\d.]+ shares of AAPL at \$[\d,.]+ for \$1,000\.00\. Live price at/.test(r)), rows2.join(" / "));
+check("AAPL is a holding with Trade", (await page.locator('[data-testid="trade-AAPL"]').count()) === 1);
 await page.locator('[data-testid="detail-trades"]').scrollIntoViewIfNeeded();
-await page.screenshot({ path: "checks/out/now-pending.png" });
+await page.screenshot({ path: "checks/out/now-done.png" });
 
-// Cancel the purchase.
-await page.locator('[data-testid="pending-row"]', { hasText: "AAPL" }).locator('[data-testid="pending-cancel"]').click();
-await page.locator('[data-testid="pending-cancel-confirm"]').click();
+// Deleting the sale would break the purchase; deleting the purchase works.
+await page.locator('[data-testid="trade-row"]', { hasText: "Sold" }).locator('[data-testid="trade-delete"]').click();
+await page.locator('[data-testid="trade-delete-confirm"]').click();
+await page.waitForTimeout(1500);
+check("deleting the sale the purchase needs is refused", /AAPL/.test(await page.locator('[data-testid="trade-delete-problem"]').innerText().catch(() => "")));
+await page.locator('[data-testid="trade-row"]', { hasText: "Bought" }).locator('[data-testid="trade-delete"]').click();
+await page.locator('[data-testid="trade-delete-confirm"]').click();
 await page.waitForTimeout(2000);
-const rows3 = await page.locator('[data-testid="pending-row"]').allInnerTexts();
-check("cancelling removes it", rows3.length === 1 && /NVDA/.test(rows3[0]), rows3.join(" / "));
+check("deleting the purchase works", (await page.locator('[data-testid="trade-row"]').count()) === 1);
 
 // A past-date trade still works from the same dialog.
 await page.click('[data-testid="trade-NVDA"]');

@@ -306,6 +306,50 @@ describe("now trades (phase 3)", () => {
   });
 });
 
+describe("now trades happen on the spot", () => {
+  // The data ends on days[599]; "today" is the next weekday, with no close yet.
+  const today = "2026-04-20";
+  const at = `${today}T15:00:00.000Z`;
+  const liveSell: Tx = { id: "ls", kind: "sell", date: today, placedAt: at, ticker: "AAA", fraction: 0.5, quote: { price: 125, at } };
+  const liveBuy: Tx = { id: "lb", kind: "buy", date: today, placedAt: `${today}T15:01:00.000Z`, ticker: "BBB", amount: 3000, quote: { price: 49, at: `${today}T15:01:00.000Z` } };
+
+  it("a live-priced sale and purchase show at once, before today's close", () => {
+    expect(days[599] < today).toBe(true);
+    const s = computeState(index, pf([liveSell, liveBuy]), end);
+    expect(s.pending).toEqual([]);
+    expect(s.fills.ls).toMatchObject({ date: today, price: 125, units: expect.closeTo(50, 9) });
+    expect(s.fills.lb).toMatchObject({ date: today, price: 49, units: expect.closeTo(3000 / 49, 9) });
+    expect(held(s, "AAA")).toBeCloseTo(50, 9);
+    expect(s.cash).toBeCloseTo(50 * 125 - 3000, 6);
+    expect(s.realized.at(-1)).toMatchObject({ sold: today, gain: expect.closeTo(50 * 125 - 50 * 100, 6) });
+    // The daily path still ends at the last close; the value includes the trade.
+    expect(s.dates.at(-1)).toBe(days[599]);
+    expect(s.value).toBeCloseTo(50 * 120 + (3000 / 49) * 50 + 50 * 125 - 3000, 6);
+    expect(s.events.find((e) => e.txId === "ls")).toMatchObject({ date: today, live: { prices: { AAA: 125 }, at } });
+  });
+
+  it("a live trade that doesn't fit is refused straight away", () => {
+    const tooMuch: Tx = { ...liveBuy, id: "big", amount: 999_999 };
+    const s = computeState(index, pf([tooMuch]), end);
+    expect(s.rejections.big?.reason).toMatch(/needs \$999,999\.00/);
+  });
+
+  it("once today's close is in, it sits on that day at the same price", () => {
+    const next = buildIndex({
+      generated: today,
+      source: "fixture",
+      series: {
+        AAA: { dates: [...days, today], closes: [...days.map((_, i) => aaa(i)), 124] },
+        BBB: { dates: [...days, today], closes: [...days.map(() => 50), 50] },
+      },
+    });
+    const s = computeState(next, pf([liveSell, liveBuy]), next.lastDate);
+    expect(s.dates.at(-1)).toBe(today);
+    expect(s.fills.ls).toMatchObject({ date: today, price: expect.closeTo(125, 9) });
+    expect(s.fills.lb).toMatchObject({ date: today, price: expect.closeTo(49, 9) });
+  });
+});
+
 describe("half days", () => {
   it("the day after Thanksgiving closes at 13:00 New York", async () => {
     const { closeInstant, closesAfter } = await import("@/lib/market");

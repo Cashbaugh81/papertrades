@@ -7,9 +7,9 @@
 //
 // Buys and sells on a date, at that day's close (buy/sell plan, phase 2), or
 // "now" (phase 3): while the market is open, at the live price the server takes
-// this moment (fills once today's close is in, priced as a ratio to it);
-// otherwise at the next close. A "now" order is pending until it fills and can
-// be cancelled (deleted) until then. The
+// this moment, done on the spot (later kept as a ratio to that day's close);
+// otherwise at the next close, pending until then and cancellable (deleted).
+// The
 // server has the final say: it replays the portfolio's whole history with the
 // app's own engine (the same code the trade dialog previews with) and saves
 // only if this trade works and no other trade stops working. Rules:
@@ -124,6 +124,20 @@ async function placeNow(req: Request, db: Db, a: NowArgs) {
 
   const id = crypto.randomUUID();
   const placedAt = new Date(nowMs).toISOString();
+  const today = nyDate(nowMs);
+  // With a live price the trade happens now, at that price: replay the whole
+  // history with it (as for a dated trade) and save it as done.
+  let fill: { date: string; price: number; units: number; amount: number } | undefined;
+  if (live) {
+    const tx = { id, kind, date: today, placedAt, ticker, quote: live, ...(amount !== undefined ? { amount } : { fraction }) };
+    const check = checkTrade(index, p, tx, index.lastDate);
+    if (check.own) return refuse(req, check.own);
+    if (check.others.length) {
+      return refuse(req, `This would stop ${check.others.length === 1 ? "another trade" : `${check.others.length} other trades`} from working.`, check.others);
+    }
+    fill = check.fill;
+    if (!fill) return refuse(req, "That trade couldn't be made just now. Try again.");
+  }
   const { error: ie } = await db.from("transactions").insert({
     id,
     portfolio_id: prow.id,
@@ -132,10 +146,19 @@ async function placeNow(req: Request, db: Db, a: NowArgs) {
     ticker,
     amount: amount ?? null,
     fraction: fraction ?? null,
-    trade_date: nyDate(nowMs),
+    trade_date: today,
     placed_at: placedAt,
     quote: live,
-    status: "pending",
+    ...(fill
+      ? {
+          status: "filled",
+          filled_on: fill.date,
+          fill_price: Math.round(fill.price * 1e6) / 1e6,
+          fill_units: Math.round(fill.units * 1e10) / 1e10,
+          fill_amount: Math.round(fill.amount * 100) / 100,
+          processed_at: placedAt,
+        }
+      : { status: "pending" }),
   });
   if (ie) throw ie;
   return json(req, { ok: true, id, ...(live ? { live } : {}) });

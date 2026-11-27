@@ -160,6 +160,10 @@ export function fillFor(
       // The ticker's own close that day. Never fall back to an older close:
       // that would be a price from before the order.
       const px = index.close(tx.ticker, day);
+      // A live price taken that day is the price, close or not.
+      if (tx.quote && nyDate(Date.parse(tx.quote.at)) === day && !(px !== undefined && px > 0)) {
+        return { day, price: tx.quote.price, live: true };
+      }
       if (px !== undefined && px > 0) {
         // A "now" order placed in market hours fills at the live price taken
         // then, once that day's close is in.
@@ -427,6 +431,11 @@ export function computeState(
   const fills: Record<string, Fill> = {};
   const rejections: PortfolioState["rejections"] = {};
   const pendingTx: Tx[] = [];
+  /**
+   * "Now" orders that got a live price on a day whose closes aren't in yet:
+   * they happen on the spot, after the last close (see below).
+   */
+  const liveTx: Tx[] = [];
   let invested = 0;
 
   // Schedule every transaction onto the day it takes effect.
@@ -462,6 +471,15 @@ export function computeState(
         rejections[tx.id] = { date: tx.date, reason };
         continue;
       }
+    }
+    if (
+      (tx.kind === "buy" || tx.kind === "sell") &&
+      tx.quote &&
+      endDate >= index.lastDate &&
+      nyDate(Date.parse(tx.quote.at)) > index.lastDate
+    ) {
+      liveTx.push(tx);
+      continue;
     }
     const f = fillFor(index, tx, dates);
     if (!f) {
@@ -633,9 +651,33 @@ export function computeState(
   const volatility = Math.sqrt(variance) * Math.sqrt(252);
 
   const finalDay = dates.length ? dates[dates.length - 1] : start;
+
+  // Trades at a live price taken today, before today's close is in: they
+  // happen now, at that price, on top of the last close. Holdings, cash, gains
+  // and the trade list show them straight away; the daily path (charts) gets
+  // today's point once the close arrives, and the trade then sits on that day
+  // at the same price (kept as a ratio to the close).
+  liveTx.sort((a, b) => (eventKey(a) < eventKey(b) ? -1 : eventKey(a) > eventKey(b) ? 1 : 0));
+  for (const tx of liveTx) {
+    const day = nyDate(Date.parse(tx.quote!.at));
+    const before = book.rejected.length;
+    const fill = applyOrder(book, tx, day, tx.quote!.price);
+    if (fill) fills[tx.id] = { ...fill, live: [tx.ticker!] };
+    else if (book.rejected.length > before) {
+      rejections[tx.id] = { date: day, reason: book.rejected[book.rejected.length - 1] };
+    }
+  }
+
   // With trading days, every deposit is already in the path. Without any, the
-  // portfolio is all cash.
-  const value = values.length ? values[values.length - 1] : book.cash + waitingTotal(book);
+  // portfolio is all cash. After a trade today, it's what's held now (at the
+  // last close) plus the cash.
+  const value = liveTx.length
+    ? [...book.units].reduce((a, [t, u]) => a + (u > 1e-9 ? u * (closeOn(index, t, finalDay) ?? 0) : 0), 0) +
+      book.cash +
+      waitingTotal(book)
+    : values.length
+      ? values[values.length - 1]
+      : book.cash + waitingTotal(book);
 
   const holdings: Holding[] = [];
   let totalHoldings = 0;
