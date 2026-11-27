@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import type { Account, PortfolioState, PriceBundle } from "@/lib/types";
@@ -9,6 +9,8 @@ import { CALENDAR_TICKER, tickersFor } from "@/lib/rows";
 import { supabase } from "@/lib/supabase";
 import {
   addColumn,
+  copyTrades,
+  skippedNote,
   cancelTx,
   replaceColumn,
   renamePortfolio,
@@ -24,7 +26,7 @@ import {
   signOut,
   toAccount,
   type ActiveSet,
-  type Mix,
+  type TradeResult,
   type TickerInfo,
 } from "@/lib/api";
 import AuthPage from "@/pages/AuthPage";
@@ -271,7 +273,19 @@ function SignedIn({ account }: { account: Account }) {
         suggestions={suggestions}
         initial={setup?.initial}
         onCancel={set ? () => setSetup(null) : undefined}
-        onCreated={() => {
+        onCreated={async (setId, slots) => {
+          // Changing the date: each portfolio's trades follow it to the same slot.
+          const carry = setup?.initial?.trades ?? [];
+          if (setId && limits.plan !== "free" && carry.length) {
+            const notes: string[] = [];
+            for (const t of carry) {
+              if (!slots?.includes(t.slot)) continue;
+              const r = await copyTrades(t.portfolioId, setId, t.slot).catch(() => ({ ok: false, problem: "try again" }) as TradeResult);
+              const note = skippedNote(r, `Portfolio ${t.slot}`);
+              if (note) notes.push(note);
+            }
+            if (notes.length) setNotice(notes.join(" "));
+          }
           setSetup(null);
           reload().catch((e) => setNotice(errText(e)));
         }}
@@ -309,8 +323,15 @@ function SignedIn({ account }: { account: Account }) {
         await replaceColumn(pid, mix, isMarket ? "Whole US market" : "", note);
         await reload();
       }}
-      onAddColumn={async (slot, mix) => {
+      onAddColumn={async (slot, mix, copyFrom) => {
         await addColumn(set.id, slot, mix);
+        // A clone brings its source's trades (Premium; checked again on the server).
+        const src = copyFrom ? set.columns.find((c) => c.slot === copyFrom) : undefined;
+        if (src && limits.plan !== "free" && src.portfolio.tx.some((t) => t.kind === "buy" || t.kind === "sell")) {
+          const r = await copyTrades(src.portfolio.id, set.id, slot);
+          const note = skippedNote(r, `Portfolio ${slot}`);
+          if (note) setNotice(note);
+        }
         await reload();
       }}
       index={index}
@@ -333,7 +354,19 @@ function SignedIn({ account }: { account: Account }) {
           .catch((e) => setNotice(errText(e)));
       }}
       onChangeDate={() =>
-        setSetup({ initial: { amount: set.initial, weekly: set.weekly, startDate: set.startDate, mixes: mixesBySlot, names: namesBySlot } })
+        setSetup({
+          initial: {
+            amount: set.initial,
+            weekly: set.weekly,
+            startDate: set.startDate,
+            mixes: mixesBySlot,
+            names: namesBySlot,
+            trades: set.columns.flatMap((c) => {
+              const dates = c.portfolio.tx.filter((t) => t.kind === "buy" || t.kind === "sell").map((t) => t.date);
+              return c.slot > 1 && dates.length ? [{ slot: c.slot, portfolioId: c.portfolio.id, dates }] : [];
+            }),
+          },
+        })
       }
       onStartOver={() => setSetup({ initial: undefined })}
     />,
@@ -343,4 +376,4 @@ function SignedIn({ account }: { account: Account }) {
 /** Common funds offered as suggestions while typing a ticker. */
 const SUGGESTED = ["VTI", "VOO", "SPY", "QQQ", "DIA", "BND", "VXUS", "SCHD", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"];
 
-type SetupInitial = { amount: number; weekly: number; startDate?: string; mixes?: (Mix | undefined)[]; names?: (string | null)[] };
+type SetupInitial = NonNullable<ComponentProps<typeof SetupPage>["initial"]>;
